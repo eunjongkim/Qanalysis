@@ -1,2 +1,2 @@
-from . import frequency_domain
-from . import time_domain
+from .frequency_domain import *
+from .time_domain import *
