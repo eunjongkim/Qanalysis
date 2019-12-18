@@ -4,6 +4,7 @@ import numpy as np
 from scipy.special import erf
 import matplotlib.pyplot as plt
 from lmfit import Parameters, Minimizer, report_fit, report_ci, conf_interval
+from collections import OrderedDict
 
 class FrequencyDomain:
     """
@@ -174,8 +175,29 @@ class FrequencyDomain:
         
         return list(p_mag) + list(p_ang)
      
+    def _conf_interval(self, advanced_ci, n_sigma):
+        if advanced_ci:
+            return conf_interval(self.mini, self.fit_result, sigmas=[n_sigma])
+        else:
+            ci = OrderedDict()
+            params = self.fit_result.params
+            for p in params:
+                name = p
+                sigma = params[p].stderr
+                mu = params[p].value
+                prob = self._n_sigma_to_prob(n_sigma)
+                ci[name] = [(prob, (mu - n_sigma * sigma)),
+                            (0.0, mu),
+                            (prob, (mu + n_sigma * sigma))]
+            return ci
 
-    def analyze_mag_dB(self):
+    def _n_sigma_to_prob(self, n_sigma):
+        """
+        Convert number of sigmas to probablility
+        """
+        return erf(n_sigma/np.sqrt(2))
+
+    def analyze_mag_dB(self, n_sigma=2, report=True, advanced_ci=False):
         """
         Analyze the data by fitting only on magnitude with dB scale. The optimization
         on phase fit parameters is not perfomed in this case.
@@ -189,21 +211,62 @@ class FrequencyDomain:
             """
             p_mag = self._mag_params_to_array(mag_params)
             p_ang0 = self._ang_params_to_array(p0_ang)
+#            return np.abs(self._dB(np.abs(self.fit_func(freq, *(list(p_mag)+list(p_ang0)))) ** 2) -
+#                          self._dB(np.abs(data) ** 2))
             return np.abs(self._dB(np.abs(self.fit_func(freq, *(list(p_mag)+list(p_ang0)))) ** 2) -
                           self._dB(np.abs(data) ** 2))
 
-        mini = Minimizer(_mag_dB_minfunc, p0_mag,
-                         fcn_args=(self.frequency, self.data), calc_covar=True)
-        result = mini.minimize(method='nelder')
-        report_fit(result)
+        self.mini = Minimizer(_mag_dB_minfunc, p0_mag,
+                              fcn_args=(self.frequency, self.data), calc_covar=True)
+        self.fit_result = self.mini.minimize(method='nelder')
 
-        self.mini = mini
-        self.p1 = result.params + p0_ang
-        self.results = result
+        self.p1 = self.fit_result.params + p0_ang
         self.is_analyzed = True
+
+        f0 = self.p1['f0_MHz'] * 1e6        
+        kappa_eOver2pi = self.p1['kappa_eOver2pi_MHz'] * 1e6
+        kappa_iOver2pi = self.p1['kappa_iOver2pi_MHz'] * 1e6
+        Q = self.p1['Q']
+        Qe = self.p1['Qe']
+        Qi = self.p1['Qi']
+        
+        self.n_sigma = n_sigma
+        # calculate confidence interval
+        
+        
+        self.ci = self._conf_interval(advanced_ci, n_sigma)
+
+        prob_n = self._n_sigma_to_prob(n_sigma)
+        bound = {}
+        for name in ['f0_MHz', 'kappa_eOver2pi_MHz', 'kappa_iOver2pi_MHz']:
+            _ci = self.ci[name]
+            ci_nsigma = np.array([c[1] for c in _ci if np.abs(c[0] - prob_n) < 1e-5])
+            
+            lowerbound = np.min(ci_nsigma)
+            upperbound = np.max(ci_nsigma)
+            
+            bound[name] = np.array([lowerbound, upperbound])
+        
+        if report:
+            # report fit
+            report_fit(self.fit_result)
+            
+            if advanced_ci:
+                # report confidence_interval
+                report_ci(self.ci)
+
+        self.results = {'f0': (f0, 1e6 * bound['f0_MHz']),
+                        'kappa_eOver2pi': (kappa_eOver2pi,
+                                           1e6 * bound['kappa_eOver2pi_MHz']),
+                        'kappa_iOver2pi': (kappa_iOver2pi,
+                                           1e6 * bound['kappa_iOver2pi_MHz']),
+                        'Qe': (Qe, ),
+                        'Qi': (Qi, )}
+        self.is_analyzed = True
+        return self.results
         return result
 
-    def analyze(self, report=True, n_sigma=2):
+    def analyze(self, n_sigma=2, report=True, advanced_ci=False):
         """
         Analyze the data using a complex fitting function simultaneously fitting
         real and imaginary part of the data
@@ -286,7 +349,7 @@ class FrequencyDomain:
                               fcn_args=(self.frequency, self.data))
         self.fit_result = self.mini.minimize(method='nelder')
         
-        self.p1 = self.fit_result .params
+        self.p1 = self.fit_result.params
 
         f0 = self.p1['f0_MHz'] * 1e6        
         kappa_eOver2pi = self.p1['kappa_eOver2pi_MHz'] * 1e6
@@ -296,14 +359,13 @@ class FrequencyDomain:
         Qi = self.p1['Qi']
         
         self.n_sigma = n_sigma
-        # calculate confidence interval
-        self.ci = conf_interval(self.mini, self.fit_result, sigmas=[n_sigma])
-        
-        prob_n = erf(n_sigma/np.sqrt(2))
+        self.ci = self._conf_interval(advanced_ci, n_sigma)
+
+        prob_n = self._n_sigma_to_prob(n_sigma)
         bound = {}
         for name in ['f0_MHz', 'kappa_eOver2pi_MHz', 'kappa_iOver2pi_MHz']:
             _ci = self.ci[name]
-            ci_nsigma = np.array([c[1] for c in _ci if np.abs(c[0] - prob_n) < 1e-9])
+            ci_nsigma = np.array([c[1] for c in _ci if np.abs(c[0] - prob_n) < 1e-5])
             
             lowerbound = np.min(ci_nsigma)
             upperbound = np.max(ci_nsigma)
@@ -313,8 +375,10 @@ class FrequencyDomain:
         if report:
             # report fit
             report_fit(self.fit_result)
-            # report confidence_interval
-            report_ci(self.ci)
+            
+            if advanced_ci:
+                # report confidence_interval
+                report_ci(self.ci)
 
         self.results = {'f0': (f0, 1e6 * bound['f0_MHz']),
                         'kappa_eOver2pi': (kappa_eOver2pi,
@@ -325,6 +389,7 @@ class FrequencyDomain:
                         'Qi': (Qi, )}
         self.is_analyzed = True
         return self.results
+        return result
 
     def plot_result(self):
         """
@@ -375,12 +440,12 @@ class FrequencyDomain:
         mag_ax.set_title(r"$Q_e = %d$, $Q_i = %d$" % (Qe, Qi))
         
         n_sigma = self.n_sigma
-        main_ax.set_title(r"%.2f$\%$ confidence interval (%d$\sigma$)" % \
-                          (100 * erf(n_sigma/np.sqrt(2)), n_sigma))
-        
+        main_ax.set_title(r"%.2f%s confidence interval (%d$\sigma$)" % \
+                          (100 * erf(n_sigma/np.sqrt(2)), '%', n_sigma))
+
         # add fit result and confidence interval to the plot
         window = self.__plot_window
-        
+
         f0_str = r"$f_0 = %.4f_{-%.4f}^{+%.4f}$ GHz" % \
             (f0/1e9, *np.abs(f0_err/1e9))
         κe_2pi_str = r"$\kappa_e/2\pi = %.4f_{-%.4f}^{+%.4f}$ MHz" % \
@@ -491,6 +556,7 @@ class WaveguideCoupledS21Fit(FrequencyDomain):
         
         a0 = _mag[0]
         ϕ0 = _angU[0]
+        τ0 = 0.0
         if (np.max(_angU) - np.min(_angU)) > 2.1 * np.pi:
             # if phase data at start and stop frequencies differ more than 2pi,
             # perform phase subtraction associated with delay
