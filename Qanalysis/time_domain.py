@@ -5,7 +5,7 @@ import numpy as np
 from scipy.optimize import curve_fit, minimize_scalar
 import matplotlib.pyplot as plt
 
-class TimeDomainAnalysis:
+class TimeDomain:
     def __init__(self, t_data, v_data, readout_type='phase', N=1000):
         # initialize parameters
         self.time = t_data
@@ -154,7 +154,7 @@ class TimeDomainAnalysis:
         if not self.is_analyzed:
             raise ValueError("The data must be analyzed before plotting")
 
-class T1Analysis(TimeDomainAnalysis):
+class T1(TimeDomain):
     """
     class to perform analysis and visualize population decay data
     """
@@ -199,7 +199,7 @@ class T1Analysis(TimeDomainAnalysis):
                           fontsize=16)
         fig.tight_layout()
 
-class T2RamseyAnalysis(TimeDomainAnalysis):
+class T2Ramsey(TimeDomain):
     """
     class to perform analysis and visualize Ramsey fringes data
     """
@@ -256,7 +256,7 @@ class T2RamseyAnalysis(TimeDomainAnalysis):
                           fontsize=16)
         fig.tight_layout()
 
-class RabiAnalysis(TimeDomainAnalysis):
+class Rabi(TimeDomain):
     """
     class to perform analysis and visualize Rabi oscillation data
     """
@@ -318,7 +318,7 @@ class RabiAnalysis(TimeDomainAnalysis):
         fig.tight_layout()
 
 
-class ReadoutAnalysis:
+class Readout:
     def __init__(self, g_data, e_data):
         # initialize parameters
         self.g_data = g_data
@@ -455,7 +455,7 @@ class ReadoutAnalysis:
         yy = (A * (-B * x + A * y) - B * C) / (A ** 2 + B ** 2)
         return xx + 1j * yy
 
-class SingleShotReadoutAnalysis(ReadoutAnalysis):
+class SingleShotReadout(Readout):
     """
     Analyze the single-shot measurement result.
     """
@@ -502,7 +502,7 @@ class SingleShotReadoutAnalysis(ReadoutAnalysis):
         """
         return np.mean(self.x_g > x0) + np.mean(self.x_e < x0)
 
-class MultiShotReadoutAnalysis(ReadoutAnalysis):
+class MultiShotReadout(Readout):
     def __init__(self, g_data, e_data):
         super().__init__(g_data, e_data)
         self.v_g = np.mean(g_data)

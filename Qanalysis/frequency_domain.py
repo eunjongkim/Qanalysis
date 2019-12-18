@@ -21,14 +21,56 @@ class FrequencyDomainAnalysis:
         # initialize fit parameters
         self.p0 = None
         self.p0_mag, self.p0_ang = self._init_fit_params(df)
+
         self.ci = None
-        self.plot_window = None
+        self.__plot_window = None
         self.p1 = None
         self.solver_options = {'maxiter': 100000, 'maxfev': 100000, 'xatol': 1e-3, 'fatol': 1e-3}
     
     def _init_fit_params(self, df):
         # to be overwritten in subclasses
         pass
+    
+    def _prepare_fit_params(self, f0, Q0, QoverQe0, df, a0, ϕ0, τ0):
+        
+        f = self.frequency
+        kappa_eOver2pi0 = f0 / (Q0 / QoverQe0)
+        kappa_iOver2pi0 = f0 / Q0 - kappa_eOver2pi0       
+        
+        # initialize magnitude fit parameters
+        p0_mag = Parameters()
+        p0_mag.add('f0_MHz', value=f0 / 1e6,
+                   min=np.min(f / 1e6),
+                   max=np.max(f / 1e6))
+        p0_mag.add('kappa_eOver2pi_MHz', value=kappa_eOver2pi0 / 1e6,
+                   min=np.min(np.diff(f) / 1e6),
+                   max=(np.max(f) - np.min(f)) / 1e6)
+        p0_mag.add('kappa_iOver2pi_MHz', value=kappa_iOver2pi0 / 1e6,
+                   min=np.min(np.diff(f) / 1e6),
+                   max=(np.max(f) - np.min(f)) / 1e6)
+        p0_mag.add('kappaOver2pi_MHz',
+                   expr='kappa_eOver2pi_MHz + kappa_iOver2pi_MHz',
+                   min=np.min(np.diff(f) / 1e6),
+                   max=(np.max(f) - np.min(f)) / 1e6)
+
+        p0_mag.add('Q', expr='f0_MHz / kappaOver2pi_MHz',
+                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
+                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
+        p0_mag.add('Qe', expr='f0_MHz / kappa_eOver2pi_MHz',
+                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
+                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
+        p0_mag.add('QoverQe', expr='Q / Qe', max=1, min=0)
+        p0_mag.add('Qi', expr='f0_MHz / kappa_iOver2pi_MHz', min=0,
+                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
+        p0_mag.add('df', value=df)
+        p0_mag.add('A', value=a0, min=0, max=1.5)
+        
+        
+        # initialize angle fit parameters
+        p0_ang = Parameters()
+        p0_ang.add('phi', value=ϕ0, min=-np.pi, max=np.pi)
+        p0_ang.add('tau_ns', value=τ0 / 1e-9)
+        return p0_mag, p0_ang
 
     def _estimate_f0_FWHM(self):
         f = self.frequency
@@ -61,7 +103,7 @@ class FrequencyDomainAnalysis:
         
         main_ax.set_xlim([- window, window])
         main_ax.set_ylim([- window, window])
-        self.plot_window = window
+        self.__plot_window = window
         main_ax.set_xlabel("Real", fontsize=14)
         main_ax.set_ylabel("Imag", fontsize=14)
         main_ax.axvline(0, color="black", lw=1)
@@ -317,14 +359,12 @@ class FrequencyDomainAnalysis:
         κe_2pi_err = results['kappa_eOver2pi'][1] - κe_2pi
         κi_2pi_err = results['kappa_iOver2pi'][1] - κi_2pi
         
-
-        
         mag_ax.set_title(r"$Q_e = %d$, $Q_i = %d$" % (Qe, Qi))
 
         main_ax.set_title("95.45% confidence interval (2$\sigma$)")
         
         # add fit result and confidence interval to the plot
-        window = self.plot_window
+        window = self.__plot_window
         
         f0_str = r"$f_0 = %.3f_{-%.3f}^{+%.3f}$ GHz" % (f0/1e9, *np.abs(f0_err/1e9))
         κe_2pi_str = r"$\kappa_e/2\pi = %.3f_{-%.3f}^{+%.3f}$ MHz" % (κe_2pi/1e6, *np.abs(κe_2pi_err/1e6))
@@ -332,13 +372,14 @@ class FrequencyDomainAnalysis:
         main_ax.text((-3/4-1/8) * window, (-3/4+1/8) * window, f0_str)
         main_ax.text((-3/4-1/8) * window, (-3/4+0/8) * window, κe_2pi_str)
         main_ax.text((-3/4-1/8) * window, (-3/4-1/8) * window, κi_2pi_str)
+
 class SingleSidedS11Fit(FrequencyDomainAnalysis):
     """
     Class for imlementing fitting of lineshape in reflection measurement
     """
     def __init__(self, freq, data, df=0, fit_mag_dB=False, plot_mag_dB=False):
         super().__init__(freq, data, df=df, fit_mag_dB=fit_mag_dB, plot_mag_dB=plot_mag_dB)
-        
+
         self.fit_type = "SingleSidedReflection"
 
     def fit_func(self, f, f0_MHz, Q, QoverQe, δf, a, ϕ, τ_ns):
@@ -356,8 +397,6 @@ class SingleSidedS11Fit(FrequencyDomainAnalysis):
         return (a * np.exp(1j * (ϕ + 2 * np.pi * (f - f[0]) * τ_ns * 1e-9)) *
                 (1 - 2 * QoverQe * (1 + 2j * δf / f0_MHz) /
                 (1 + 2j * (Q) * (f/1e6 - f0_MHz) / (f0_MHz))))
-
-
 
     def _init_fit_params(self, df):
         # magnitude data
@@ -382,39 +421,8 @@ class SingleSidedS11Fit(FrequencyDomainAnalysis):
         QoverQe0 = 0.5 * (1 - np.min(_mag) / a0)
         Q0 = f0 / Δf
         
-        kappa_eOver2pi0 = f0 / (Q0 / QoverQe0)
-        kappa_iOver2pi0 = Δf - kappa_eOver2pi0
-        
-        p0_mag = Parameters()
-        p0_mag.add('f0_MHz', value=f0 / 1e6,
-                   min=np.min(f / 1e6),
-                   max=np.max(f / 1e6))
-        p0_mag.add('kappa_eOver2pi_MHz', value=kappa_eOver2pi0 / 1e6,
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-        p0_mag.add('kappa_iOver2pi_MHz', value=kappa_iOver2pi0 / 1e6,
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-        p0_mag.add('kappaOver2pi_MHz',
-                   expr='kappa_eOver2pi_MHz + kappa_iOver2pi_MHz',
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-
-        p0_mag.add('Q', expr='f0_MHz / kappaOver2pi_MHz',
-                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('Qe', expr='f0_MHz / kappa_eOver2pi_MHz',
-                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('QoverQe', expr='Q / Qe', max=1, min=0)
-        p0_mag.add('Qi', expr='f0_MHz / kappa_iOver2pi_MHz', min=0,
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('df', value=df)
-        p0_mag.add('A', value=a0, min=0, max=1.5)
-        
-        p0_ang = Parameters()
-        p0_ang.add('phi', value=ϕ0, min=-np.pi, max=np.pi)
-        p0_ang.add('tau_ns', value=τ0 / 1e-9)
+        p0_mag, p0_ang = self._prepare_fit_params(f0, Q0, QoverQe0,
+                                                  df, a0, ϕ0, τ0)
 
         self.p0 = p0_mag + p0_ang
         return p0_mag, p0_ang
@@ -468,42 +476,8 @@ class WaveguideCoupledS21Fit(FrequencyDomainAnalysis):
         f0, Δf = self._estimate_f0_FWHM()
         QoverQe0 = (1 - np.min(_mag) / a0)
         Q0 = f0 / Δf
-
-        kappa_eOver2pi0 = f0 / (Q0 / QoverQe0)
-        kappa_iOver2pi0 = Δf - kappa_eOver2pi0
-
-        # initialize parameters for magnitude fit
-        p0_mag = Parameters()
-        p0_mag.add('f0_MHz', value=f0 / 1e6,
-                   min=np.min(f / 1e6),
-                   max=np.max(f / 1e6))
-        p0_mag.add('kappa_eOver2pi_MHz', value=kappa_eOver2pi0 / 1e6,
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-        p0_mag.add('kappa_iOver2pi_MHz', value=kappa_iOver2pi0 / 1e6,
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-        p0_mag.add('kappaOver2pi_MHz',
-                   expr='kappa_eOver2pi_MHz + kappa_iOver2pi_MHz',
-                   min=np.min(np.diff(f) / 1e6),
-                   max=(np.max(f) - np.min(f)) / 1e6)
-
-        p0_mag.add('Q', expr='f0_MHz / kappaOver2pi_MHz',
-                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('Qe', expr='f0_MHz / kappa_eOver2pi_MHz',
-                   min=(f0 / 1e6) / ((np.max(f) - np.min(f)) / 1e6),
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('QoverQe', expr='Q / Qe', max=1, min=0)
-        p0_mag.add('Qi', expr='f0_MHz / kappa_iOver2pi_MHz', min=0,
-                   max=(f0 / 1e6) / (np.min(np.diff(f)) / 1e6))
-        p0_mag.add('df', value=df)
-        p0_mag.add('A', value=a0, min=0, max=1.5)
-
-        # initialize parameters for phase fit        
-        p0_ang = Parameters()
-        p0_ang.add('phi', value=ϕ0, min=-np.pi, max=np.pi)
-        p0_ang.add('tau_ns', value=τ0 / 1e-9)
+        p0_mag, p0_ang = self._prepare_fit_params(f0, Q0, QoverQe0,
+                                                  df, a0, ϕ0, τ0)
 
         self.p0 = p0_mag + p0_ang
         return p0_mag, p0_ang
