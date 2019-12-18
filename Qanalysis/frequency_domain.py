@@ -5,7 +5,7 @@ from scipy.special import erf
 import matplotlib.pyplot as plt
 from lmfit import Parameters, Minimizer, report_fit, report_ci, conf_interval
 
-class FrequencyDomainAnalysis:
+class FrequencyDomain:
     """
     Class for implementing fitting of lineshape in various configurations
     """
@@ -23,6 +23,7 @@ class FrequencyDomainAnalysis:
         self.p0_mag, self.p0_ang = self._init_fit_params(df)
 
         self.ci = None
+        self.n_sigma = None
         self.__plot_window = None
         self.p1 = None
         self.solver_options = {'maxiter': 100000, 'maxfev': 100000, 'xatol': 1e-3, 'fatol': 1e-3}
@@ -106,25 +107,30 @@ class FrequencyDomainAnalysis:
         self.__plot_window = window
         main_ax.set_xlabel("Real", fontsize=14)
         main_ax.set_ylabel("Imag", fontsize=14)
-        main_ax.axvline(0, color="black", lw=1)
-        main_ax.axhline(0, color="black", lw=1)
+        main_ax.axvline(0, color="black", lw=1, alpha=0.2)
+        main_ax.axhline(0, color="black", lw=1, alpha=0.2)
+
         # plot mag axis
         if self.plot_mag_dB:
             mag_ax.scatter(self.frequency/1e9,
-                           self._dB(np.abs(self.data) ** 2), s=2, color="blue")
+                           self._dB(np.abs(self.data) ** 2),
+                           s=2, color="blue")
         else:
-            mag_ax.scatter(self.frequency/1e9, np.abs(self.data), s=2, color="blue")
+            mag_ax.scatter(self.frequency/1e9, np.abs(self.data),
+                           s=2, color="blue")
             
-        mag_ax.set_ylabel(r"Magnitude" + self.plot_mag_dB * " (dB)", fontsize=12)
+        mag_ax.set_ylabel(r"Magnitude" + self.plot_mag_dB * " (dB)",
+                          fontsize=12)
 
         # plot ang axis
-        ang_ax.scatter(self.frequency/1e9, np.unwrap(np.angle(self.data)), s=2, color="blue")
+        ang_ax.scatter(self.frequency/1e9, np.unwrap(np.angle(self.data)),
+                       s=2, color="blue")
         ang_ax.set_xlabel("Frequency (GHz)", fontsize=12)
         ang_ax.set_ylabel(r"Phase (rad)", fontsize=12)
         
         min_freq, max_freq = np.min(self.frequency), np.max(self.frequency)
-        mag_ax.set_xlim([min_freq/1e9, max_freq/1e9])
-        ang_ax.set_xlim([min_freq/1e9, max_freq/1e9])
+        mag_ax.set_xlim([min_freq / 1e9, max_freq / 1e9])
+        ang_ax.set_xlim([min_freq / 1e9, max_freq / 1e9])
 
         axes = [main_ax, mag_ax, ang_ax]
         return fig, axes
@@ -288,7 +294,8 @@ class FrequencyDomainAnalysis:
         Q = self.p1['Q']
         Qe = self.p1['Qe']
         Qi = self.p1['Qi']
-
+        
+        self.n_sigma = n_sigma
         # calculate confidence interval
         self.ci = conf_interval(self.mini, self.fit_result, sigmas=[n_sigma])
         
@@ -335,10 +342,16 @@ class FrequencyDomainAnalysis:
         
         main_ax, mag_ax, ang_ax = axes
         
-        main_ax.plot(_fit0.real, _fit0.imag, ls=":", color="orange", label="Initial Params")
+        main_ax.plot(_fit0.real, _fit0.imag, ls=":", color="orange", label="Init. Params.")
         main_ax.plot(_fit1.real, _fit1.imag, ls="-", color="black", label="Fit")
-        main_ax.legend()
-
+        
+        # Shrink current axis by 20%
+        box = main_ax.get_position()
+        main_ax.set_position([box.x0 - 0.2 * box.width, box.y0, box.width, box.height])
+        
+        # Put a legend to the right of the current axis
+        main_ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        
         if self.plot_mag_dB:
             mag_ax.plot(freq_fit/1e9, self._dB(np.abs(_fit0) ** 2),
                         ls=':', color='orange')
@@ -360,20 +373,31 @@ class FrequencyDomainAnalysis:
         κi_2pi_err = results['kappa_iOver2pi'][1] - κi_2pi
         
         mag_ax.set_title(r"$Q_e = %d$, $Q_i = %d$" % (Qe, Qi))
-
-        main_ax.set_title("95.45% confidence interval (2$\sigma$)")
+        
+        n_sigma = self.n_sigma
+        main_ax.set_title(r"%.2f$\%$ confidence interval (%d$\sigma$)" % \
+                          (100 * erf(n_sigma/np.sqrt(2)), n_sigma))
         
         # add fit result and confidence interval to the plot
         window = self.__plot_window
         
-        f0_str = r"$f_0 = %.3f_{-%.3f}^{+%.3f}$ GHz" % (f0/1e9, *np.abs(f0_err/1e9))
-        κe_2pi_str = r"$\kappa_e/2\pi = %.3f_{-%.3f}^{+%.3f}$ MHz" % (κe_2pi/1e6, *np.abs(κe_2pi_err/1e6))
-        κi_2pi_str = r"$\kappa_i/2\pi = %.3f_{-%.3f}^{+%.3f}$ MHz" % (κi_2pi/1e6, *np.abs(κi_2pi_err/1e6))
-        main_ax.text((-3/4-1/8) * window, (-3/4+1/8) * window, f0_str)
-        main_ax.text((-3/4-1/8) * window, (-3/4+0/8) * window, κe_2pi_str)
-        main_ax.text((-3/4-1/8) * window, (-3/4-1/8) * window, κi_2pi_str)
+        f0_str = r"$f_0 = %.4f_{-%.4f}^{+%.4f}$ GHz" % \
+            (f0/1e9, *np.abs(f0_err/1e9))
+        κe_2pi_str = r"$\kappa_e/2\pi = %.4f_{-%.4f}^{+%.4f}$ MHz" % \
+            (κe_2pi/1e6, *np.abs(κe_2pi_err/1e6))
+        κi_2pi_str = r"$\kappa_i/2\pi = %.4f_{-%.4f}^{+%.4f}$ MHz" % \
+            (κi_2pi/1e6, *np.abs(κi_2pi_err/1e6))
+        
+        textstr = '\n'.join((f0_str, κe_2pi_str, κi_2pi_str))
+        # these are matplotlib.patch.Patch properties
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
 
-class SingleSidedS11Fit(FrequencyDomainAnalysis):
+        # place a text box in upper left in axes coords
+        main_ax.text(0.05, 0.95, textstr, transform=main_ax.transAxes,
+                     fontsize=10, verticalalignment='top', bbox=props)
+
+
+class SingleSidedS11Fit(FrequencyDomain):
     """
     Class for imlementing fitting of lineshape in reflection measurement
     """
@@ -428,7 +452,7 @@ class SingleSidedS11Fit(FrequencyDomainAnalysis):
         return p0_mag, p0_ang
         
 
-class WaveguideCoupledS21Fit(FrequencyDomainAnalysis):
+class WaveguideCoupledS21Fit(FrequencyDomain):
     """
     Class for imlementing fitting of lineshape in reflection measurement
     """
