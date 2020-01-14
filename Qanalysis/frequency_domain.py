@@ -45,10 +45,10 @@ class FrequencyDomain:
                    min=np.min(f / 1e6),
                    max=np.max(f / 1e6))
         p0_mag.add('kappa_eOver2pi_MHz', value=kappa_eOver2pi0 / 1e6,
-                   min=0),
+                   min=0,
                    max=(np.max(f) - np.min(f)) / 1e6)
         p0_mag.add('kappa_iOver2pi_MHz', value=kappa_iOver2pi0 / 1e6,
-                   min=0),
+                   min=0,
                    max=(np.max(f) - np.min(f)) / 1e6)
         p0_mag.add('kappaOver2pi_MHz',
                    expr='kappa_eOver2pi_MHz + kappa_iOver2pi_MHz',
