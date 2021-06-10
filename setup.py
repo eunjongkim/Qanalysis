@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="Qanalysis-eunjongkim", # Replace with your own username
-    version="0.0.1",
+    version="0.1.1",
     author="Eunjong Kim",
     author_email="ekim7206@gmail.com",
     description="Qubit Measurement Analysis",

@@ -1,6 +1,29 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
+from scipy.signal import windows
+
+def _get_envelope(s, t, f):
+    """
+    Find the envelope of an oscillating real-valued signal `s` as a function of time `t` by demodulating at the
+    frequency specified by `f` followed by low-pass filtering at cutoff of half the specified frequency.
+    """
+    # time step
+    dt = t[1] - t[0]
+
+    # perform manual demodulation to get envelope
+    I = s * np.cos(2 * np.pi * f * t)
+    Q = s * np.sin(2 * np.pi * f * t)
+
+    # extract envelope by low-pass filtering at cutoff of f / 2
+    _window = int(1 / (f * dt))
+    _hann = windows.hann(_window * 2, sym=True)
+    _hann = _hann / np.sum(_hann)
+
+    envI = np.convolve(I, _hann, 'same') * 2
+    envQ = np.convolve(Q, _hann, 'same') * 2
+
+    return envI, envQ
 
 class TimeDomain:
     def __init__(self, time, signal):
@@ -314,19 +337,19 @@ class PopulationDecay(TimeDomain):
 
 class Ramsey(TimeDomain):
     """
-    class to perform analysis and visualize Ramsey fringes data
+    Class to perform analysis and visualize Ramsey fringes data.
     """
     def __init__(self, time, signal):
         super().__init__(time, signal)
         self.T2Ramsey = None
         self.delta_freq = None
 
-    def fit_func(self, t, T2, δf, t0, a, b, c, Td):
+    def fit_func(self, t, T2, δf, t0, a, b):
         """
         Fitting Function for Ramsey Fringes
+            f(t) = a exp(-t/T2) cos[2π∆f(t-t0)] + b
         """
-        return (a * np.exp(- t / T2) * np.cos(2 * np.pi * δf * (t - t0)) +
-                b + c * np.exp(-t / Td))
+        return a * np.exp(- t / T2) * np.cos(2 * np.pi * δf * (t - t0)) + b
 
     def _guess_init_params(self):
         b0 = np.mean(self.signal)
@@ -337,8 +360,23 @@ class Ramsey(TimeDomain):
         freq = np.fft.rfftfreq(len(self.signal),
                                d=(self.time[1]-self.time[0]))
         δf0 = freq[np.argmax(np.abs(np.fft.rfft(self.signal - np.mean(self.signal))))]
-        T20 = (self.time[-1] - self.time[0]) / 3
-        self.p0 = [T20, δf0, 0.0, a0, b0, 0.0, T20]
+
+        # in-phase and quadrature envelope
+        envI, envQ = _get_envelope(signal0, self.time, δf0)
+        t00 = np.arctan(np.sum(envQ) / np.sum(envI)) / (2 * np.pi * δf0)
+
+        # extract envelope by low-pass filtering at cutoff of δf0 / 2
+        _window = int(1 / (δf0 * (self.time[1] - self.time[0])))
+        _hann = windows.hann(_window * 2, sym=True)
+        _hann = _hann / np.sum(_hann)
+
+        env = np.sqrt(envI ** 2 + envQ ** 2)
+        if env[-1] < env[0]: # sanity check: make sure the envelope is decreasing over time
+            T20 = - (self.time[-1] - self.time[0]) / np.log(env[-1] / env[0])
+        else:
+            T20 = self.time[-1] - self.time[0]
+
+        self.p0 = [T20, δf0, t00, a0, b0]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)

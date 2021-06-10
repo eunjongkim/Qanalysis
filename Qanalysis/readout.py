@@ -16,6 +16,7 @@ import numpy as np
 import seaborn as sns
 from scipy.signal import windows
 
+
 class SingleShotGaussian:
     """
     Class to implement analysis of single-shot measurement records of
@@ -86,8 +87,9 @@ class SingleShotGaussian:
         Plot the result of the single-shot readout analysis.
     
     """
-    
+
     _bbox_props = dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9)
+
     def __init__(self, signal):
         # An array of complex readout signals when the qubit was initialized to state 0, state 1, ...
         self.signal = signal
@@ -133,15 +135,15 @@ class SingleShotGaussian:
 
         """
         if cluster_method == 'gmm':
-            self._gaussian_mixture_clustering()              
-        
-        # fitting with multi-mode Gaussian
+            self._gaussian_mixture_clustering()
+
+            # fitting with multi-mode Gaussian
         x0, bounds = self._prepare_x0_bounds()
         fit = least_squares(self._gaussian_mixture_residual_function, x0,
                             bounds=bounds,
                             args=(binsI, binsQ))
         self.means, self.variances, self.weights = self._x0_to_meas_vars_weights(fit.x)
-        
+
         # fidelity estimation
         logprob = np.zeros((self.num_of_states,
                             self.num_of_points,
@@ -152,13 +154,13 @@ class SingleShotGaussian:
                     (2 * self.variances[i])) - np.log(self.variances[i]))
         # choose the state maximizing the log probablility
         self.state_prediction = np.argmax(logprob, axis=-1)
-        
+
         # confusion matrix & fidelity
         confusion = (self._count_occurences(self.state_prediction) /
                      self.num_of_points)
         self.confusion = confusion
         self.fidelity = np.sum(np.diagonal(confusion)) / self.num_of_states
-        
+
         # SNR
         comb_list = list(combinations(range(self.num_of_states), 2))
         snr_list = []
@@ -169,16 +171,16 @@ class SingleShotGaussian:
             snr = signal / noise
             snr_list.append(snr)
         self.signal_to_noise_ratio = dict(zip(comb_list, snr_list))
-        
+
         self.is_analyzed = True
         if plot:
             self.plot_result()
-        
+
     def _prepare_x0_bounds(self):
         means_flat = np.dstack((self.means.real, self.means.imag))
         means_vars = np.append(means_flat, self.variances)
         x0 = np.append(means_vars, self.weights[1:, :].flatten())
-        
+
         lb = []
         ub = []
         sig_flat = self.signal.flatten()
@@ -197,12 +199,12 @@ class SingleShotGaussian:
             ub.append(1)
         bounds = (lb, ub)
         return x0, bounds
-    
+
     def _x0_to_meas_vars_weights(self, x0):
         means_ = x0[:(2 * self.num_of_states)].reshape(self.num_of_states, 2)
         means = means_[:, 0] + 1j * means_[:, 1]
         variances = x0[(2 * self.num_of_states):(3 * self.num_of_states)]
-        
+
         weights = np.zeros((self.num_of_states, self.num_of_states))
         weights[:, 1:] = x0[(3 * self.num_of_states):].reshape(self.num_of_states,
                                                                self.num_of_states - 1)
@@ -215,7 +217,7 @@ class SingleShotGaussian:
         sig_flat = self.signal.flatten()
         hist_range = [[np.min(sig_flat.real), np.max(sig_flat.real)],
                       [np.min(sig_flat.imag), np.max(sig_flat.imag)]]
-        
+
         hists = []
         I_edges, Q_edges = None, None
         for i in range(self.num_of_states):
@@ -225,7 +227,7 @@ class SingleShotGaussian:
                                                  range=hist_range, normed=True)
             hists.append(H)
         self.hists = np.array(hists)
-        
+
         I_range = (I_edges[1:] + I_edges[:-1]) / 2
         Q_range = (Q_edges[1:] + Q_edges[:-1]) / 2
         self.hist_ranges = I_range, Q_range
@@ -233,7 +235,7 @@ class SingleShotGaussian:
         # create a binsI X binsQ grid of points in the (I, Q) plane
         I_, Q_ = np.meshgrid(I_range, Q_range)
         pos = np.dstack((I_.T, Q_.T))
-        
+
         # 2D normal distribution
         norm_dists = []
         for i in range(self.num_of_states):
@@ -244,20 +246,20 @@ class SingleShotGaussian:
             norm_dists.append(pdf_)
         norm_dists = np.array(norm_dists)
         self.norm_dists = norm_dists
-        
+
         self.hist_fits = np.tensordot(weights, norm_dists, axes=([1], [0]))
 
         return (self.hists - self.hist_fits).flatten()
-    
+
     def _count_occurences(self, pred):
-        
+
         count = np.zeros((self.num_of_states,
                           self.num_of_states))
         for i in range(self.num_of_states):
             for j in range(self.num_of_states):
                 count[i, j] = np.sum(pred[i, :] == j)
         return count
-        
+
     def _gaussian_mixture_clustering(self):
         # perform clustering of the full data set with Gaussian mixture model
         sig_flat = self.signal.flatten()
@@ -279,7 +281,7 @@ class SingleShotGaussian:
         self.means = np.array([means_[i, 0] + 1j * means_[i, 1] for i in range(self.num_of_states)])[mapping]
         self.variances = gmm.covariances_[mapping]
         self.state_prediction = pr_state_[mapping, :]
-        
+
         # weights of each state preparation fitted to Gaussian components
         self.weights = (self._count_occurences(self.state_prediction) /
                         self.num_of_points)
@@ -288,7 +290,7 @@ class SingleShotGaussian:
         """
         Plot IQ blobs in the complex plane with SNR info annotated.
         """
-        state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D'] 
+        state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
 
         for i in range(self.num_of_states):
             blob_ax.plot(self.signal[i, :].real, self.signal[i, :].imag,
@@ -310,7 +312,7 @@ class SingleShotGaussian:
         blob_ax.text(1, 1, "\n".join(snr_str), size=6,
                      transform=blob_ax.transAxes, ha="right", va="top",
                      bbox=self._bbox_props)
-        
+
         for i in range(self.num_of_states):
             mu = self.means[i]
             sigma = np.sqrt(self.variances[i])
@@ -331,7 +333,7 @@ class SingleShotGaussian:
         conf_mat_ax.set_xlabel('Prediction')
         conf_mat_ax.set_title(r'Readout fidelity $\mathcal{F}=%.3f$' % self.fidelity)
         conf_mat_ax.xaxis.set_ticklabels(labels)
-        conf_mat_ax.yaxis.set_ticklabels(labels)      
+        conf_mat_ax.yaxis.set_ticklabels(labels)
 
     def plot_result(self):
         """
@@ -361,35 +363,36 @@ class SingleShotGaussian:
             data_axes[i].contourf(*self.hist_ranges, self.hists[i].T, levels=100)
             fit_axes[i].contourf(*self.hist_ranges, self.hist_fits[i].T, levels=100)
             weight_str = [r"$w_{|%d\rangle} = %.3f$" % (k, self.weights[i, k]) for k in range(self.num_of_states)]
-            
+
             data_axes[i].set_title(r"$|%d\rangle$ Prep." % i)
-            
+
             fit_axes[i].text(1, 1, "\n".join(weight_str), size=6,
                              transform=fit_axes[i].transAxes,
                              ha="right", va="top",
                              bbox=self._bbox_props)
             data_axes[i].axis('equal')
             fit_axes[i].axis('equal')
-        
+
         # plot IQ blobs with SNR
         self._plot_iq_blobs(blob_ax)
-        
+
         # plot confusion matrix & readout fidelity
         self._plot_confusion_matrix(conf_mat_ax)
 
         return fig
+
 
 class SingleShotGaussianTwoStates(SingleShotGaussian):
     def __init__(self, signal):
         super().__init__(signal)
         if self.num_of_states != 2:
             raise ValueError("The number of states (number of rows of input argument) to be analyzed is 2.")
-    
+
     def analyze(self, binsI=50, binsQ=50, cluster_method='gmm', plot=True):
         # run analysis of the superclass without plotting
         super().analyze(binsI=binsI, binsQ=binsQ,
                         cluster_method=cluster_method, plot=False)
-        
+
         # perform projection to 1D line connecting the means of two fitted Gaussians
         self._project_to_1D()
 
@@ -415,20 +418,20 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
         """
         mu0, mu1 = self.means1D
         var0, var1 = self.variances1D
-        
+
         a = 0.5 * (1 / var0 - 1 / var1)
         b = - (mu0 / var0 - mu1 / var1)
         c = 0.5 * (mu0 ** 2 / var0 - mu1 ** 2 / var1) - 0.5 * np.log(var1 / var0)
-        
+
         if a == 0:
             return -c / b
         else:
             return (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2 * a)
 
     def _project_to_1D(self):
-        
+
         mu0, mu1 = self.means
-        self.origin = 0.5 * (mu0 + mu1) # origin of the axis of projection
+        self.origin = 0.5 * (mu0 + mu1)  # origin of the axis of projection
 
         # unit vector along the line connecting the mean of Gaussians
         self.n = (mu1 - mu0) / np.abs(mu1 - mu0)
@@ -439,11 +442,11 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
                                                        self.n) / sigma for i in range(self.num_of_states)])
         self.means1D = self._inner_product(self.means - self.origin, self.n) / sigma
         self.variances1D = self.variances / sigma ** 2
-        
+
         self.decision_boundary1D = self._calculate_desc_bd()
         self.decision_boundary = (self.decision_boundary1D * sigma * self.n +
                                   self.origin)
-        
+
         _hist_range = np.min(self.signal1D), np.max(self.signal1D)
         hists1D = []
         s_edges = None
@@ -476,13 +479,13 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
     def _plot_iq_blobs(self, blob_ax):
         super()._plot_iq_blobs(blob_ax)
-        
+
         I_range, Q_range = self.hist_ranges
         Imin, Imax = np.min(I_range), np.max(I_range)
         Qmin, Qmax = np.min(Q_range), np.max(Q_range)
 
         # draw a line to which projection of signal was performed
-        
+
         # slope = self.n.imag / self.n.real
         # x0, y0 = self.origin.real, self.origin.imag
         # project_line = slope * (I_range - x0) + y0
@@ -514,18 +517,17 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
         p1 = self.decision_boundary + t * 0.5 * d
         blob_ax.axline((p0.real, p0.imag), (p1.real, p1.imag),
                        color='black', ls='--', lw=1)
-        
-        
+
     def plot_result(self):
         fig = plt.figure(constrained_layout=True)
         # gridspec
         gs = fig.add_gridspec(2, 1)
         data_fit_ax = fig.add_subplot(gs[0])
-        
+
         sgs1 = gs[1].subgridspec(1, 2)
         blob_ax = fig.add_subplot(sgs1[0])
         conf_mat_ax = fig.add_subplot(sgs1[1])
-        
+
         width = self.hist_range1D[1] - self.hist_range1D[0]
         for i in range(self.num_of_states):
             data_fit_ax.bar(self.hist_range1D, self.hists1D[i], width=width,
@@ -544,7 +546,7 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
         data_fit_ax.axvline(self.decision_boundary1D, ls='--', color='black',
                             label="Decision Bd.")
         data_fit_ax.legend(fontsize='x-small', loc=2)
-        
+
         error_str = []
         for i in range(self.num_of_states):
             error_str.append(r"Overlap err. $|%d\rangle$: %.4f" % (i, self.overlap_error[i]))
@@ -560,11 +562,12 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
         # plot confusion matrix & readout fidelity
         self._plot_confusion_matrix(conf_mat_ax)
-        
+
         return fig
 
+
 class ReadoutTrace:
-    
+
     def __init__(self, adc, frequency, adc_sample_rate=1e9,
                  downsample_factor=4, timediff=0,
                  prediction=None, timestamp=None, demod_factor=2 ** -12):
@@ -574,7 +577,7 @@ class ReadoutTrace:
         self.downsample_factor = downsample_factor
         self.num_of_states, self.num_of_points, self.readout_length = adc.shape
         self.times = np.arange(self.readout_length) / self.adc_sample_rate
-        self.demod_factor = demod_factor # constant factor multiplied during demodulation
+        self.demod_factor = demod_factor  # constant factor multiplied during demodulation
         # prepare timestamps of all adc datapoints
         self.timestamp = timestamp
         self.timediff = timediff
@@ -591,12 +594,12 @@ class ReadoutTrace:
             self.timestamp = np.tensordot(
                 np.ones((self.num_of_states, self.num_of_points)),
                 np.arange(self.readout_length), axes=0)
-            
+
         else:
             if len(self.timestamp.shape) == 2:
                 self.timestamp = \
                     (np.tensordot(
-                         self.timestamp, np.ones(self.readout_length), axes=0) + 
+                        self.timestamp, np.ones(self.readout_length), axes=0) +
                      np.tensordot(
                          np.ones((self.num_of_states, self.num_of_points)),
                          np.arange(self.readout_length), axes=0))
@@ -641,7 +644,7 @@ class ReadoutTrace:
                                                          (-1, samples)),
                                               axis=1))
         self.downsampled_avg_traces = np.array(downsampled_traces)
-    
+
     def _find_weight_and_bias(self):
         traces = self.downsampled_avg_traces
         norm = np.max(np.abs(traces))
@@ -665,7 +668,7 @@ class ReadoutTrace:
             # Sb = np.transpose(traces) @ np.conj(traces)
             # Assume within-class covariance matrix are spherical (diagonal)
             # and identical between classes
-        
+
             eigval, eigv = np.linalg.eig(Sb)
             # choose eigenvector with largest eigenvalue
             sortperm = np.argsort(np.abs(eigval))
@@ -678,7 +681,7 @@ class ReadoutTrace:
             self.expected_demodulated_points = \
                 (np.conj(self.optimal_integration_weight) @ traces.T *
                  self.downsample_factor * self.demod_factor)
-    
+
             self.optimal_bias = (np.abs(self.expected_demodulated_points) ** 2) / 2
 
         self.bias = None
@@ -697,13 +700,13 @@ class ReadoutTrace:
 
         fig = plt.figure(constrained_layout=True)
         gs = fig.add_gridspec(1, 2)
-        
+
         sgs = gs[0].subgridspec(2, 1)
         time_axes = [fig.add_subplot(sgs[k]) for k in range(2)]
         iq_ax = fig.add_subplot(gs[1])
         times = self.times
-        
-        state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D'] 
+
+        state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
         for i in range(self.num_of_states):
             time_axes[0].plot(times / 1e-9,
                               self.avg_downconverted_adc_trace[i, :].real,
@@ -722,20 +725,18 @@ class ReadoutTrace:
                        self.avg_downconverted_adc_trace[i, :].imag,
                        '.-', ms=4, color='C%d' % i,
                        label=r"$|%d\rangle$ Avg. trace" % i)
-            
+
         demod = np.mean(self.avg_downconverted_adc_trace, axis=-1)
         # weighted_demod = \
         #     np.array([np.average(self.avg_downconverted_adc_trace[i], axis=-1,
         #                          weights=self.weights[i]) for i in range(self.num_of_states)])
         for i in range(self.num_of_states):
-            iq_ax.plot(demod[i].real, demod[i].imag, 
+            iq_ax.plot(demod[i].real, demod[i].imag,
                        marker=state_markers[i], ms=7, lw=0, color='black',
                        label=r"$|%d\rangle$ Demod." % i)
             # iq_ax.plot(weighted_demod[i].real, weighted_demod[i].imag, 
             #            marker=state_markers[i], ms=7, lw=0, color='blue',
             #            label=r"$|%d\rangle$ Weighted Demod." % i)
-
-    
 
         time_axes[1].set_xlabel("Time (ns)")
         time_axes[0].set_ylabel("I (V)")
