@@ -13,7 +13,7 @@ def _get_envelope(s, t, f):
 
     # perform manual demodulation to get envelope
     I = s * np.cos(2 * np.pi * f * t)
-    Q = s * np.sin(2 * np.pi * f * t)
+    Q = - s * np.sin(2 * np.pi * f * t)
 
     # extract envelope by low-pass filtering at cutoff of f / 2
     _window = int(1 / (f * dt))
@@ -363,7 +363,7 @@ class Ramsey(TimeDomain):
 
         # in-phase and quadrature envelope
         envI, envQ = _get_envelope(signal0, self.time, δf0)
-        t00 = np.arctan(np.sum(envQ) / np.sum(envI)) / (2 * np.pi * δf0)
+        t00 = - np.arctan(np.sum(envQ) / np.sum(envI)) / (2 * np.pi * δf0)
 
         # extract envelope by low-pass filtering at cutoff of δf0 / 2
         _window = int(1 / (δf0 * (self.time[1] - self.time[0])))
