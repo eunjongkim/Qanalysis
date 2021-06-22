@@ -43,6 +43,72 @@ def analyze_lorentzian(f, sig, p0=None):
 
 # class DispersiveShift:
     
+    
+class TimeDomain:
+    def __init__(self, freq, signal):
+        # initialize parameters
+        self.frequency = freq
+        self.signal = signal
+        self.n_pts = len(self.signal)
+        self.is_analyzed = False
+        self.p0 = None
+        self.popt = None
+        self.pcov = None
+
+    def _init_fit_params(self, df):
+        # to be overwritten in subclasses
+        pass
+
+    def _guess_init_params(self):
+        """
+        Guess initial parameters from data. Will be overwritten in subclass
+        """
+
+    def _set_init_params(self, p0):
+        if p0 is None:
+            self._guess_init_params()
+        else:
+            self.p0 = p0
+    def _save_fit_results(self, popt, pcov):
+        self.popt = popt
+        self.pcov = pcov
+
+    def analyze(self, p0=None, plot=True, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        popt, pcov = curve_fit(self.fit_func, self.frequency, self.signal,
+                               p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
+
+    def _plot_base(self):
+        fig = plt.figure()
+
+        # plot data
+        plt.plot(self.time / 1e-6, self.signal, '.', label="Data", color="black")
+        plt.xlabel(r"Time ($\mu$s)")
+        plt.ylabel("Signal")
+        plt.legend(loc=0, fontsize=14)
+
+        fig.tight_layout()
+        return fig
+
+    def plot_result(self):
+        """
+        Will be overwritten in subclass
+        """
+        if not self.is_analyzed:
+            raise ValueError("The data must be analyzed before plotting")
+
 
 class acStarkShift:
     """
