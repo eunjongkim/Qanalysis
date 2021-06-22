@@ -35,6 +35,8 @@ class TimeDomain:
         self.p0 = None
         self.popt = None
         self.pcov = None
+        self.lb = None
+        self.ub = None
 
     def fit_func(self):
         """
@@ -62,7 +64,13 @@ class TimeDomain:
         # set initial fit parameters
         self._set_init_params(p0)
         # perform fitting
-        popt, pcov = curve_fit(self.fit_func, self.time, self.signal, p0=self.p0, **kwargs)
+        if self.lb is not None and self.ub is not None:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, bounds=(self.lb, self.ub),
+                                   **kwargs)
+        else:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, **kwargs)
         self.is_analyzed = True
 
         # save fit results
@@ -243,13 +251,16 @@ class PowerRabi(TimeDomain):
         a / 2 (1 - cos(π * amp / amp_pi)) + b
         Here amp_pi is the amplitude corresponding to the pi-pulse.
         """
-        return a / 2 * (1 - np.cos(np.pi * amp / (amp_pi))) + b
+        return a / 2 * (1 - np.cos(np.pi * amp / amp_pi)) + b
 
     def _guess_init_params(self):
         # perform fft to find frequency of Rabi oscillation
         freq = np.fft.rfftfreq(len(self.signal), d=(self.amp[1] - self.amp[0]))
+        
+        sig0 = self.signal - np.mean(self.signal)
         # initial parameter for Rabi frequency from FFT
-        F0 = freq[np.argmax(np.abs(np.fft.rfft(self.signal - np.mean(self.signal))))]
+        F0 = freq[np.argmax(np.abs(np.fft.rfft(sig0)))]
+        dF = freq[1] - freq[0]
         amp_pi0 = 1 / (2 * F0)
         b0 = self.signal[0]
         a0 = np.max(self.signal) - np.min(self.signal)
@@ -257,6 +268,12 @@ class PowerRabi(TimeDomain):
             a0 *= -1
 
         self.p0 = [amp_pi0, a0, b0]
+        if a0 > 0:
+            self.lb = [1 / (2 * (F0 + dF)), 0.5 * a0, -np.inf]
+            self.ub = [1 / (2 * (F0 - dF)), np.inf, np.inf]
+        else:
+            self.lb = [1 / (2 * (F0 + dF)), -np.inf, -np.inf]
+            self.ub = [1 / (2 * (F0 - dF)), 0.5 * a0, np.inf]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
@@ -269,7 +286,10 @@ class PowerRabi(TimeDomain):
         Analyze Power Rabi oscillation curve with model
         """
         self._set_init_params(p0)
-        popt, pcov = curve_fit(self.fit_func, self.amp, self.signal, p0=self.p0, **kwargs)
+
+        popt, pcov = curve_fit(self.fit_func, self.amp, self.signal,
+                               p0=self.p0, bounds=(self.lb, self.ub),
+                               **kwargs)
         self.is_analyzed = True
 
         self._save_fit_results(popt, pcov)
@@ -286,13 +306,15 @@ class PowerRabi(TimeDomain):
         plt.plot(self.amp, self.signal, '.', label="Data", color="black")
         plt.xlabel(r"Amplitude (A.U.)")
         plt.ylabel("Signal")
-        plt.legend(loc=0, fontsize=14)
 
         amp_fit = np.linspace(self.amp[0], self.amp[-1], fit_n_pts)
-
-        plt.plot(amp_fit, self.fit_func(amp_fit, *(self.popt)), label="Fit", lw=2, color="red")
-        plt.title(r"$a_{\pi} = %.5f \pm %.5f$" % (self.amp_pi,
-                                                    2 * self.amp_pi_sigma_err))
+        plt.plot(amp_fit, self.fit_func(amp_fit, *(self.p0)),
+                 label="Fit (init. param.)", lw=2, ls='--', color="orange")
+        plt.plot(amp_fit, self.fit_func(amp_fit, *(self.popt)),
+                 label="Fit (opt. param.)", lw=2, color="red")
+        plt.title(r"$a_{\pi} = %.5f \pm %.5f$" %
+                  (self.amp_pi, 2 * self.amp_pi_sigma_err))
+        plt.legend(loc=0, fontsize='x-small')
         fig.tight_layout()
         plt.show()
 
@@ -354,16 +376,17 @@ class Ramsey(TimeDomain):
     def _guess_init_params(self):
         b0 = np.mean(self.signal)
         signal0 = self.signal - b0
-        a0 = np.max(np.abs(signal0))
+        amax = np.max(np.abs(signal0))
 
         # perform fft to find frequency of Ramsey fringes
         freq = np.fft.rfftfreq(len(self.signal),
                                d=(self.time[1]-self.time[0]))
         δf0 = freq[np.argmax(np.abs(np.fft.rfft(self.signal - np.mean(self.signal))))]
-
+        df = freq[1] - freq[0] # frequency step of FFT
+        
         # in-phase and quadrature envelope
         envI, envQ = _get_envelope(signal0, self.time, δf0)
-        t00 = - np.arctan(np.sum(envQ) / np.sum(envI)) / (2 * np.pi * δf0)
+        t00 = - np.angle(np.sum(envI), np.sum(envQ)) / (2 * np.pi * δf0)
 
         # extract envelope by low-pass filtering at cutoff of δf0 / 2
         _window = int(1 / (δf0 * (self.time[1] - self.time[0])))
@@ -376,7 +399,11 @@ class Ramsey(TimeDomain):
         else:
             T20 = self.time[-1] - self.time[0]
 
-        self.p0 = [T20, δf0, t00, a0, b0]
+        self.p0 = [T20, δf0, t00, amax, b0]
+
+        # # lower and upper bounds for fit parameters
+        # self.lb = [0.0, δf0 - df, -np.inf, 0.5 * env, -np.inf]
+        # self.ub = [np.inf, δf0 + df, np.inf, amax * 1.1, np.inf]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
@@ -395,12 +422,16 @@ class Ramsey(TimeDomain):
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
 
         plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.popt)),
-                 label="Fit", lw=2, color="red")
+                 label="Fit (opt. param.)", lw=2, color="red")
+        plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.p0)),
+                 label="Fit (init. param.)", lw=2, ls='--', color="orange")
         plt.title(r"$T_2^* = %.5f \pm %.5f\:\mu\mathrm{s}$, $\Delta f = %.4f \pm %.4f \:\mathrm{MHz}$"\
                   % (self.T2Ramsey / 1e-6, 2 * self.T2Ramsey_sigma_err / 1e-6,
                      self.delta_freq / 1e6, 2 * self.delta_freq_sigma_err / 1e6))
+        plt.legend(loc=0, fontsize='x-small')
         fig.tight_layout()
         plt.show()
+        return fig
 
 class RamseyWithGaussian(TimeDomain):
     """

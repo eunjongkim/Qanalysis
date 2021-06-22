@@ -38,8 +38,44 @@ def analyze_lorentzian(f, sig, p0=None):
         
             p0 = [f0, gamma, a, b]
 
-    fit = curve_fit(lorentzian_fit_func, f, sig_mag, p0=p0)
+    fit = curve_fit(lorentzian_fit_func, f, sig_mag, p0=p0, 
+                    bounds=([p0[0] * 0.5, p0[1] * 0.5, 0, p0[3] * 0.1], 
+                            [p0[0] * 1.5, p0[1] * 1.5, np.inf, p0[3] * 10]))
     return fit
+
+def gaussian_fit_func(f, f0, a, c, d):
+    return a * np.exp(-(f - f0)**2 / (2 * c**2)) + d
+
+def analyze_gaussian(f, sig, p0=None):
+    sig_mag = sig
+    if sig.dtype == complex:
+        sig_mag = np.abs(sig) ** 2
+        
+    if p0 is None:
+        if (np.max(sig_mag) - np.mean(sig_mag)) > (np.mean(sig_mag) - np.min(sig_mag)):
+            # peak detected case
+            f0 = f[np.argmax(sig_mag)]
+            d = np.mean(sig_mag[np.argsort(sig_mag)[:int(len(sig_mag) // 10)]]) # baseline (average of smallest 10% samples)
+            # linewidth is extracted from sample closest to half-max
+            c = 1 / np.sqrt(2) * np.abs(f[np.argmin(np.abs(sig_mag - ((np.max(sig_mag) - d) / np.exp(1) + d)))] - f0)
+            a = (np.max(sig_mag) - d)
+            
+            p0 = [f0, a, c, d]
+        elif (np.max(sig_mag) - np.mean(sig_mag)) < (np.mean(sig_mag) - np.min(sig_mag)):
+            # valley detected case
+            f0 = f[np.argmin(sig_mag)]
+            d = np.mean(sig_mag[np.argsort(-sig_mag)[:int(len(sig) // 10)]]) # baseline (average of largest 10% samples)
+            # linewidth is extracted from sample closest to half-max
+            c = 1 / np.sqrt(2) * np.abs(f[np.argmin(np.abs(sig_mag - ((np.min(sig_mag) - d) / np.exp(1) + d)))] - f0)
+            a = (np.min(sig_mag) - d)
+        
+            p0 = [f0, a, c, d]
+        
+        fit = curve_fit(gaussian_fit_func, f, sig_mag, p0=p0,
+                        bounds=([p0[0] * 0.5, p0[1] * 0.5, p0[2] * 0.1, 0], 
+                                [p0[0] * 1.5, p0[1] * 1.5, p0[2] * 10, np.inf]))
+    return fit
+    
 
 # class DispersiveShift:
     
