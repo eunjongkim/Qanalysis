@@ -326,6 +326,7 @@ class PopulationDecay(TimeDomain):
         super().__init__(time, signal)
         self.T1 = None
         self.T1_sigma_err = None
+
     def fit_func(self, t, T1, a, b):
         """
         Fitting Function for T1
@@ -344,6 +345,7 @@ class PopulationDecay(TimeDomain):
 
         self.T1 = popt[0]
         self.T1_sigma_err = np.sqrt(pcov[0, 0])
+
     def plot_result(self, fit_n_pts=1000):
         super().plot_result()
 
@@ -366,12 +368,12 @@ class Ramsey(TimeDomain):
         self.T2Ramsey = None
         self.delta_freq = None
 
-    def fit_func(self, t, T2, δf, t0, a, b):
+    def fit_func(self, t, T2, df, t0, a, b):
         """
         Fitting Function for Ramsey Fringes
             f(t) = a exp(-t/T2) cos[2π∆f(t-t0)] + b
         """
-        return a * np.exp(- t / T2) * np.cos(2 * np.pi * δf * (t - t0)) + b
+        return a * np.exp(- t / T2) * np.cos(2 * np.pi * df * (t - t0)) + b
 
     def _guess_init_params(self):
         b0 = np.mean(self.signal)
