@@ -274,8 +274,8 @@ class GaussianFit(FrequencyDomain):
             a0 = dip_a0
             f0 = f[np.argmax(signal)]
 
-        # sigma linewidth is extracted from sample closest to exp(-1/2) of max
-        sigma_f0 = np.abs(f[np.argmin(np.abs(signal - (np.exp(-0.5) * a0 + b0)))] - f0)
+        # sigma linewidth is extracted from sample closest to 1/2 of max
+        sigma_f0 = np.sqrt(np.log(2) / 2) * np.abs(f[np.argmin(np.abs(signal - (0.5 * a0 + b0)))] - f0)
 
         self.p0 = [f0, sigma_f0, a0, b0]
 
@@ -515,3 +515,58 @@ class GaussianFit(FrequencyDomain):
 #         plt.xlabel("Frequency (GHz)")
 #         plt.ylabel("Power (dBm)")
         
+
+# class WaveguideCoupledS21Fit(FrequencyDomain):
+#     """
+#     Class for imlementing fitting of lineshape in reflection measurement
+#     """
+#     def __init__(self, freq, data, df=0, fit_mag_dB=False, plot_mag_dB=False):
+#         super().__init__(freq, data, df=df, fit_mag_dB=fit_mag_dB, plot_mag_dB=plot_mag_dB)
+
+#         self.fit_type = "WaveguideCoupledTransmission"
+
+#     def fit_func(self, f, f0_MHz, Q, QoverQe, δf, a, ϕ, τ_ns):
+#         """
+#         Reflection fit for resonator single-sided coupled to waveguide
+#         according to relation
+#         S11 = a0 * exp(i(ϕ0 + 2pi * (f - f[0]) * τ0)) .* ...
+#              (1 - QoverQe * (1 + 2i * δf / f0) / (1 + 2i * Q * (f - f0) / f0))
+
+#         Note: If df = 0 (no background) this gives
+#         S21 = 1 - (kappa_e) / (kappa_i + kappa_e + 2i (omega - omega0))
+#             = (kappa_i + 2i (omega - omega0)) / (kappa_i + kappa_e + 2i (omega - omega0))
+#         See Khalil et al, "An analysis method for asymmetric resonator
+#         transmission applied to superconducting devices",
+#         J. Appl. Phys. 111, 054510 (2012).
+#         """
+#         return (a * np.exp(1j * (ϕ + 2 * np.pi * (f - f[0]) * τ_ns * 1e-9)) *
+#                 (1 - QoverQe * (1 + 2j * δf / f0_MHz) /
+#                 (1 + 2j * (Q) * (f/1e6 - f0_MHz) / (f0_MHz))))
+
+#     def _init_fit_params(self, df):
+#         # magnitude data
+#         _mag = np.abs(self.data)
+#         # phase data
+#         _ang = np.angle(self.data)
+#         # unwrapped phase data
+#         _angU = np.unwrap(_ang)
+
+#         f = self.frequency
+
+#         a0 = _mag[0]
+#         ϕ0 = _angU[0]
+#         τ0 = 0.0
+#         if (np.max(_angU) - np.min(_angU)) > 2.1 * np.pi:
+#             # if phase data at start and stop frequencies differ more than 2pi,
+#             # perform phase subtraction associated with delay
+#             τ0 = (_angU[-1] - _angU[0]) / ((f[-1] - f[0]))/ (2 * np.pi)
+
+#         # Estimate total Q from the FWHM in |mag|^2
+#         f0, Δf = self._estimate_f0_FWHM()
+#         QoverQe0 = (1 - np.min(_mag) / a0)
+#         Q0 = f0 / Δf
+#         p0_mag, p0_ang = self._prepare_fit_params(f0, Q0, QoverQe0,
+#                                                   df, a0, ϕ0, τ0)
+
+#         self.p0 = p0_mag + p0_ang
+#         return p0_mag, p0_ang
