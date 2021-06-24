@@ -669,7 +669,6 @@ class EasyReadout:
         yy = (A * (-B * x + A * y) - B * C) / (A ** 2 + B ** 2)
         return xx + 1j * yy
 
-
 class MeasInducedDephasing:
     _bbox_props = dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9)
     def __init__(self, xi, phi, signal, tau_p):

@@ -145,14 +145,16 @@ class FrequencyDomain:
         if not self.is_analyzed:
             raise ValueError("The data must be analyzed before plotting")
 
-def get_const_baseline(samples, baseline_portion=0.1):
-    
-    N = len(samples)
-    bs_left = np.mean(samples[:int(baseline_portion * N)])
-    bs_right = np.mean(samples[int(-baseline_portion * N):])
-    
-    baseline = np.mean([bs_left, bs_right])
-    return baseline
+    def _get_const_baseline(self, baseline_portion=0.1):
+        
+        samples = self.signal
+        
+        N = len(samples)
+        bs_left = np.mean(samples[:int(baseline_portion * N)])
+        bs_right = np.mean(samples[int(-baseline_portion * N):])
+        
+        baseline = np.mean([bs_left, bs_right])
+        return baseline
 
 class LorentzianFit(FrequencyDomain):
     """
@@ -191,7 +193,7 @@ class LorentzianFit(FrequencyDomain):
         signal = self.signal
         f = self.frequency
 
-        b0 = get_const_baseline(signal)
+        b0 = self._get_const_baseline()
         
         peak_A0, dip_A0 = np.max(signal) - b0, np.min(signal) - b0
         if peak_A0 > - dip_A0: # peak detected case
@@ -264,7 +266,7 @@ class GaussianFit(FrequencyDomain):
         signal = self.signal
         f = self.frequency
 
-        b0 = get_const_baseline(signal)
+        b0 = self._get_const_baseline()
 
         peak_a0, dip_a0 = np.max(signal) - b0, np.min(signal) - b0
         if peak_a0 > - dip_a0: # peak detected case
