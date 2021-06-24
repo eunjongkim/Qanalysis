@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import windows
+from .helper_functions import number_with_si_prefix, si_prefix_to_scaler
 
 def _get_envelope(s, t, f):
     """
@@ -20,10 +21,8 @@ def _get_envelope(s, t, f):
     _hann = windows.hann(_window * 2, sym=True)
     _hann = _hann / np.sum(_hann)
 
-    envI = np.convolve(I, _hann, 'same') * 2
-    envQ = np.convolve(Q, _hann, 'same') * 2
-
-    return envI, envQ
+    envComplex = np.convolve(I + 1j * Q, _hann, 'same') * 2
+    return envComplex
 
 class TimeDomain:
     def __init__(self, time, signal):
@@ -83,8 +82,13 @@ class TimeDomain:
         fig = plt.figure()
 
         # plot data
-        plt.plot(self.time / 1e-6, self.signal, '.', label="Data", color="black")
-        plt.xlabel(r"Time ($\mu$s)")
+        _, self.time_prefix = number_with_si_prefix(np.max(np.abs(self.time)))
+        self.time_scaler = si_prefix_to_scaler(self.time_prefix)
+
+        # plot data
+        plt.plot(self.time / self.time_scaler, self.signal, '.',
+                 label="Data", color="black")
+        plt.xlabel("Time (" + self.time_prefix + 's)')
         plt.ylabel("Signal")
         plt.legend(loc=0, fontsize=14)
 
@@ -337,8 +341,15 @@ class PopulationDecay(TimeDomain):
 
         a0 = self.signal[0] - self.signal[-1]
         b0 = self.signal[-1]
-        T10 = (self.time[-1] - self.time[0]) / 3  # choose 1/3 of time window as init. value
+        
+        mid_idx = np.argmin(np.abs(self.signal - (a0 / 2 + b0)))
+        T10 = ((self.time[0] - self.time[mid_idx]) /
+               np.log(1 - (self.signal[0] - self.signal[mid_idx]) / a0))
+
         self.p0 = [T10, a0, b0]
+        # lb = [-np.inf, 0, np.min(self.signal)]
+        # ub = [np.inf, (np.max(self.signal) - np.min(self.signal)),
+        #       np.max(self.signal)]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
@@ -351,11 +362,21 @@ class PopulationDecay(TimeDomain):
 
         # get most of the plotting done
         fig = self._plot_base()
+        
 
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
-        plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.popt)), label="Fit", lw=2, color="red")
-        plt.title(r"$T_1 = %.5f \pm %.5f \:\mu\mathrm{s}$" % (self.T1 / 1e-6,
-                                                            2 * self.T1_sigma_err / 1e-6))
+        
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.p0)),
+                 label="Fit (Init. Param.)", lw=2, ls='--', color="orange")
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.popt)),
+                 label="Fit (Opt. Param.)", lw=2, color="red")
+        plt.title(r"$T_1$ = %.5f $\pm$ %.5f " %
+                  (self.T1 / self.time_scaler,
+                   2 * self.T1_sigma_err / self.time_scaler) +
+                  self.time_prefix + 's')
+        plt.legend(fontsize='x-small')
         fig.tight_layout()
         plt.show()
 
@@ -382,20 +403,16 @@ class Ramsey(TimeDomain):
 
         # perform fft to find frequency of Ramsey fringes
         freq = np.fft.rfftfreq(len(self.signal),
-                               d=(self.time[1]-self.time[0]))
+                               d=(self.time[1] - self.time[0]))
         δf0 = freq[np.argmax(np.abs(np.fft.rfft(self.signal - np.mean(self.signal))))]
         df = freq[1] - freq[0] # frequency step of FFT
         
         # in-phase and quadrature envelope
-        envI, envQ = _get_envelope(signal0, self.time, δf0)
-        t00 = - np.angle(np.sum(envI), np.sum(envQ)) / (2 * np.pi * δf0)
+        envComplex = _get_envelope(signal0, self.time, δf0)
+        t00 = - np.angle(np.sum(envComplex)) / (2 * np.pi * δf0)
 
-        # extract envelope by low-pass filtering at cutoff of δf0 / 2
-        _window = int(1 / (δf0 * (self.time[1] - self.time[0])))
-        _hann = windows.hann(_window * 2, sym=True)
-        _hann = _hann / np.sum(_hann)
+        env = np.abs(envComplex)
 
-        env = np.sqrt(envI ** 2 + envQ ** 2)
         if env[-1] < env[0]: # sanity check: make sure the envelope is decreasing over time
             T20 = - (self.time[-1] - self.time[0]) / np.log(env[-1] / env[0])
         else:
@@ -423,13 +440,31 @@ class Ramsey(TimeDomain):
 
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
 
-        plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.popt)),
-                 label="Fit (opt. param.)", lw=2, color="red")
-        plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.p0)),
-                 label="Fit (init. param.)", lw=2, ls='--', color="orange")
-        plt.title(r"$T_2^* = %.5f \pm %.5f\:\mu\mathrm{s}$, $\Delta f = %.4f \pm %.4f \:\mathrm{MHz}$"\
-                  % (self.T2Ramsey / 1e-6, 2 * self.T2Ramsey_sigma_err / 1e-6,
-                     self.delta_freq / 1e6, 2 * self.delta_freq_sigma_err / 1e6))
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.popt)),
+                 label="Fit (Opt. Param.)", lw=2, color="red")
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.p0)),
+                 label="Fit (Init. Param.)", lw=2, ls='--', color="orange")
+        
+        
+        _, T2_prefix = number_with_si_prefix(self.T2Ramsey)
+        T2_scaler = si_prefix_to_scaler(T2_prefix)
+        
+        T2_string = (r"$T_2^*$ = %.4f $\pm$ %.4f " %
+                     (self.T2Ramsey / T2_scaler,
+                      2 * self.T2Ramsey_sigma_err / T2_scaler) +
+                      T2_prefix + 's')
+
+        _, delta_freq_prefix = number_with_si_prefix(self.delta_freq)
+        delta_freq_scaler = si_prefix_to_scaler(delta_freq_prefix)
+
+        delta_freq_string = (r"$\Delta f$ = %.4f $\pm$ %.4f " %
+                     (self.delta_freq / delta_freq_scaler,
+                      2 * self.delta_freq_sigma_err / delta_freq_scaler) +
+                     delta_freq_prefix + 'Hz')
+        
+        plt.title(T2_string + ',' + delta_freq_string)
         plt.legend(loc=0, fontsize='x-small')
         fig.tight_layout()
         plt.show()
@@ -508,10 +543,13 @@ class SpinEcho(TimeDomain):
         return a * np.exp(- t / T2) + b
 
     def _guess_init_params(self):
-
         a0 = self.signal[0] - self.signal[-1]
         b0 = self.signal[-1]
-        T20 = (self.time[-1] - self.time[0]) / 3  # choose 1/3 of time window as init. value
+        
+        mid_idx = np.argmin(np.abs(self.signal - (a0 / 2 + b0)))
+        T20 = ((self.time[0] - self.time[mid_idx]) /
+               np.log(1 - (self.signal[0] - self.signal[mid_idx]) / a0))
+
         self.p0 = [T20, a0, b0]
 
     def _save_fit_results(self, popt, pcov):
@@ -526,9 +564,21 @@ class SpinEcho(TimeDomain):
         fig = self._plot_base()
 
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
-        plt.plot(time_fit / 1e-6, self.fit_func(time_fit, *(self.popt)), label="Fit", lw=2, color="red")
-        plt.title(r"$T_{2E} = %.5f \pm %.5f \:\mu\mathrm{s}$" % (self.T2Echo / 1e-6,
-                                                                  2 * self.T2Echo_sigma_err / 1e-6))
+        
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.p0)),
+                 label="Fit (Init. Param.)", ls='--', lw=2, color="orange")
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.popt)),
+                 label="Fit (Opt. Param.)", lw=2, color="red")
+        
+        _, T2Echo_prefix = number_with_si_prefix(self.T2Echo)
+        T2Echo_scaler = si_prefix_to_scaler(T2Echo_prefix)
+
+        plt.title(r"$T_{2E}$ = %.5f $\pm$ %.5f " %
+                  (self.T2Echo / T2Echo_scaler,
+                   2 * self.T2Echo_sigma_err / T2Echo_scaler) +
+                  T2Echo_prefix + 's')
         fig.tight_layout()
         plt.show()
 

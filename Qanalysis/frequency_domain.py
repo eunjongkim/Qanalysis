@@ -199,9 +199,9 @@ class LorentzianFit(FrequencyDomain):
             f0 = f[np.argmax(signal)]
         else: # valley detected case
             A0 = dip_A0
-            f0 = f[np.argmax(signal)]
+            f0 = f[np.argmin(signal)]
 
-        # linewidth is extracted from sample closest to half-max
+        # linewidth is extracted from sample closest to half-max(arg1, arg2, _args)
         df0 = 2 * np.abs(f[np.argmin(np.abs(signal - (0.5 * A0 + b0)))] - f0)
         a0 = A0 * (df0 / 2) ** 2
 
@@ -272,7 +272,7 @@ class GaussianFit(FrequencyDomain):
             f0 = f[np.argmax(signal)]
         else: # valley detected case
             a0 = dip_a0
-            f0 = f[np.argmax(signal)]
+            f0 = f[np.argmin(signal)]
 
         # sigma linewidth is extracted from sample closest to 1/2 of max
         sigma_f0 = np.sqrt(np.log(2) / 2) * np.abs(f[np.argmin(np.abs(signal - (0.5 * a0 + b0)))] - f0)
