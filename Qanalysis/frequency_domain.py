@@ -145,16 +145,22 @@ class FrequencyDomain:
         if not self.is_analyzed:
             raise ValueError("The data must be analyzed before plotting")
 
-    def _get_const_baseline(self, baseline_portion=0.1):
+    def _get_const_baseline(self, baseline_portion=0.2,
+                            baseline_ref='symmetric'):
         
         samples = self.signal
         
         N = len(samples)
-        bs_left = np.mean(samples[:int(baseline_portion * N)])
-        bs_right = np.mean(samples[int(-baseline_portion * N):])
-        
-        baseline = np.mean([bs_left, bs_right])
-        return baseline
+        if baseline_ref == 'left':
+            bs = np.mean(samples[:int(baseline_portion * N)])
+        elif baseline_ref == 'right':
+            bs = np.mean(samples[int(-baseline_portion * N):])
+        elif baseline_ref == 'symmetric':
+            bs_left = np.mean(samples[int(-baseline_portion * N / 2):])
+            bs_right = np.mean(samples[:int(baseline_portion * N / 2)])
+            bs = np.mean([bs_left, bs_right])
+
+        return bs
 
 class LorentzianFit(FrequencyDomain):
     """
