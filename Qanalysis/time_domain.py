@@ -586,18 +586,25 @@ class EasyReadout:
     """
     Class to implement easy analysis of readout data.
     """
-    def __init__(self, data, readout_type='phase', ang_tol=np.pi/1000):
+    def __init__(self, data, means=None,
+                 readout_type='phase', ang_tol=np.pi/1000):
         self.data = data
         self.n_pts = len(self.data)
 
-        # This will be overwritten in `self._project_to_line` function call
-        self.n = 1.0 + 0.0j     # unit vector connecting the ground and excited state points in the complex plane
-        self.v_g = 0.0 + 0.0j   # ground state point in the complex plane
-        self.v_e = 0.0 + 0.0j   # excited state point in the complex plane
-
-        # qubit population extracted by fitting to a line and
-        self.population = None
-        self._project_to_line(readout_type, ang_tol)
+        if means is None:
+            # This will be overwritten in `self._project_to_line` function call
+            self.n = 1.0 + 0.0j     # unit vector connecting the ground and excited state points in the complex plane
+            self.v_g = 0.0 + 0.0j   # ground state point in the complex plane
+            self.v_e = 0.0 + 0.0j   # excited state point in the complex plane
+    
+            # qubit population extracted by fitting to a line and
+            self.population = None
+            self._project_to_line(readout_type, ang_tol)
+        else:
+            self.v_g = means[0]
+            self.v_e = means[1]
+            
+            self.population = np.real((data - self.v_g) / (self.v_e - self.v_g))
 
     def _project_to_line(self, readout_type, ang_tol):
         """
