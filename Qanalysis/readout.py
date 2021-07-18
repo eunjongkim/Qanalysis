@@ -279,7 +279,7 @@ class SingleShotGaussian:
         # reorder the components of the fit to state indices
         means_ = gmm.means_
         self.means = np.array([means_[i, 0] + 1j * means_[i, 1] for i in range(self.num_of_states)])[mapping]
-        self.variances = gmm.covariances_[mapping]
+        self.variances = np.array([gmm.covariances_[mapping][0] for i in range(self.num_of_states)])
         self.state_prediction = pr_state_[mapping, :]
 
         # weights of each state preparation fitted to Gaussian components
@@ -291,11 +291,12 @@ class SingleShotGaussian:
         Plot IQ blobs in the complex plane with SNR info annotated.
         """
         state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
+        data_ms = np.sqrt(10000 / self.num_of_points)
 
         for i in range(self.num_of_states):
             blob_ax.plot(self.signal[i, :].real, self.signal[i, :].imag,
                          '.', label=r'$|%d\rangle$ Prep.' % i, alpha=.3,
-                         color='C%d' % i, ms=3)
+                         color='C%d' % i, ms=data_ms)
         for i in range(self.num_of_states):
             blob_ax.plot(self.means[i].real, self.means[i].imag,
                          marker=state_markers[i], ms=5, color='black')
