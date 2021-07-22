@@ -343,6 +343,7 @@ class PopulationDecay(TimeDomain):
         b0 = self.signal[-1]
         
         mid_idx = np.argmin(np.abs(self.signal - (a0 / 2 + b0)))
+        
         T10 = ((self.time[0] - self.time[mid_idx]) /
                np.log(1 - (self.signal[0] - self.signal[mid_idx]) / a0))
 
@@ -414,7 +415,8 @@ class Ramsey(TimeDomain):
         env = np.abs(envComplex)
 
         if env[-1] < env[0]: # sanity check: make sure the envelope is decreasing over time
-            T20 = - (self.time[-1] - self.time[0]) / np.log(env[-1] / env[0])
+            mid_idx = np.argmin(np.abs(env - 0.5 * (env[-1] + env[0])))
+            T20 = - (self.time[mid_idx] - self.time[0]) / np.log(env[mid_idx] / env[0])
         else:
             T20 = self.time[-1] - self.time[0]
 
