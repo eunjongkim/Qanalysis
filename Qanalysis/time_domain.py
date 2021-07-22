@@ -582,6 +582,126 @@ class SpinEcho(TimeDomain):
         fig.tight_layout()
         plt.show()
 
+class DRAGMotzoiXY(TimeDomain):
+    def __init__(self, beta, signal, labels=None):
+        # initialize parameters
+        self.beta = beta
+        self.signal = signal
+        self.n_seq, self.n_pts = self.signal.shape
+        self.is_analyzed = False
+        if labels is None:
+            self.sequence = [str(i) for i in range(self.n_seq0)]
+        else:
+            self.sequence = labels
+
+        self.p0 = None
+        self.lb = None
+        self.ub = None
+
+        self.popt = None
+        self.pcov = None
+
+        self.beta0 = None
+        self.signal0 = None
+        
+    def fit_func(self, beta, beta0, signal0, *a):
+        """
+        Fitting Function for DRAG Motzoi XY experiment. The function returns
+        an array of length n_seq * n_pts.
+        """
+        
+        N = len(beta) // self.n_seq
+        
+        return np.hstack(
+            [(a[i] * (beta[i * N:((i + 1) * N)] - beta0) +
+              signal0) for i in range(self.n_seq)])
+
+    def _guess_init_params(self):
+        
+        a0 = [((self.signal[i, -1] - self.signal[i, 0]) /
+               (self.beta[-1] - self.beta[0])) for i in range(self.n_seq)]
+
+        closest_idx = np.argmin(np.var(self.signal, axis=0))
+        beta0 = self.beta[closest_idx]
+        signal0 = np.mean(self.signal[:, closest_idx])
+
+        self.p0 = [beta0, signal0, *a0]
+
+    def analyze(self, p0=None, plot=True, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        if self.lb is not None and self.ub is not None:
+            popt, pcov = curve_fit(self.fit_func,
+                                   np.hstack([self.beta] * self.n_seq),
+                                   self.signal.flatten(),
+                                   p0=self.p0, bounds=(self.lb, self.ub),
+                                   **kwargs)
+        else:
+            popt, pcov = curve_fit(self.fit_func,
+                                   np.hstack([self.beta] * self.n_seq),
+                                   self.signal.flatten(),
+                                   p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
+
+    def _save_fit_results(self, popt, pcov):
+        super()._save_fit_results(popt, pcov)
+
+        self.beta_opt = popt[0]
+        self.signal_opt = popt[1]
+        self.beta_opt_sigma_err = np.sqrt(pcov[0, 0])
+        self.signal_opt_sigma_err = np.sqrt(pcov[1, 1])
+
+    def plot_result(self, fit_n_pts=1000):
+        super().plot_result()
+
+        fig = plt.figure()
+
+        # plot data
+        for i in range(self.n_seq):
+            plt.plot(self.beta, self.signal[i, :], '.',
+                     label="Data " + self.sequence[i], color="C%d" % i)
+        plt.xlabel(r"DRAG param. $\beta$")
+        plt.ylabel("Signal")
+
+        beta_fit = np.linspace(self.beta[0], self.beta[-1], fit_n_pts)
+
+        fits0 = self.fit_func(np.hstack([beta_fit] * self.n_seq),
+                              *(self.p0)).reshape(self.n_seq, fit_n_pts)
+        fits = self.fit_func(np.hstack([beta_fit] * self.n_seq),
+                             *(self.popt)).reshape(self.n_seq, fit_n_pts)
+        
+        for i in range(self.n_seq):
+            plt.plot(beta_fit, fits0[i, :],
+                     label="Fit " + self.sequence[i] + " (init. param.)", lw=1, ls='--',
+                     color="C%d" % i, alpha=0.5)
+        for i in range(self.n_seq):
+            plt.plot(beta_fit, fits[i, :],
+                     label="Fit " + self.sequence[i] + " (opt. param.)", lw=2, ls='-', color="C%d" % i)
+            
+        plt.axvline(x=self.beta_opt, ls='--', color='black')
+        plt.axhline(y=self.signal_opt, ls='--', color='black')
+
+        plt.title(r"$\beta_\mathrm{opt} = %.3f \pm %.3f$" %
+                  (self.beta_opt, 2 * self.beta_opt_sigma_err))
+        plt.legend(loc='lower left', fontsize='x-small', ncol=self.n_seq)
+        fig.tight_layout()
+        plt.show()
+
+
+# class AllXY(TimeDomain):
+    
+
+
 class EasyReadout:
     """
     Class to implement easy analysis of readout data.
@@ -766,5 +886,4 @@ class MeasInducedDephasing:
                          color='blue', lw=2)
         fit_axes[1].set_xlabel(r"Relative RO amp. $\xi$")
         fit_axes[1].set_ylabel(r"Ramsey envelope $c(\xi)$")
-        fit_axes[1].legend(loc=1, fontsize='x-small')
 
