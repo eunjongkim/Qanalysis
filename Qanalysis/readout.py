@@ -566,17 +566,19 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
         return fig
 
-
 class ReadoutTrace:
-
-    def __init__(self, adc, frequency, adc_sample_rate=1e9,
-                 downsample_factor=4, timediff=0,
-                 prediction=None, timestamp=None, demod_factor=2 ** -12):
+    def __init__(self, adc, frequency: float, adc_sample_rate: float=1e9,
+                 downsample_factor: int=4, timediff: int=0,
+                 prediction=None, timestamp=None, demod_factor: float=2 ** -12):
         self.adc_trace = adc
         self.frequency = frequency
         self.adc_sample_rate = adc_sample_rate
         self.downsample_factor = downsample_factor
-        self.num_of_states, self.num_of_points, self.readout_length = adc.shape
+        
+        if len(adc.shape) == 2:
+            self.num_of_states, self.readout_length = adc.shape
+        if len(adc.shape) == 3:
+            self.num_of_states, self.num_of_points, self.readout_length = adc.shape
         self.times = np.arange(self.readout_length) / self.adc_sample_rate
         self.demod_factor = demod_factor  # constant factor multiplied during demodulation
         # prepare timestamps of all adc datapoints
@@ -684,8 +686,6 @@ class ReadoutTrace:
                  self.downsample_factor * self.demod_factor)
 
             self.optimal_bias = (np.abs(self.expected_demodulated_points) ** 2) / 2
-
-        self.bias = None
 
     def analyze(self, plot=True, filter_bandwidth=None):
 
