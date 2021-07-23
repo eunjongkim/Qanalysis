@@ -585,6 +585,10 @@ class SpinEcho(TimeDomain):
         plt.show()
 
 class DRAGMotzoiXY(TimeDomain):
+    '''
+    Class to analyze and visualize DRAG pulse calibration experiment
+    for determining Motzoi parameter (beta).
+    '''
     def __init__(self, beta, signal, labels=None):
         # initialize parameters
         self.beta = beta
@@ -700,9 +704,127 @@ class DRAGMotzoiXY(TimeDomain):
         plt.show()
 
 
-# class AllXY(TimeDomain):
-    
+class AllXY(TimeDomain):
+    '''
+    Class to analyze and visualize AllXY experiment result.
+    '''
 
+    def __init__(self, sequence, signal):
+        self.sequence = sequence
+        self.signal = signal
+        self.n_seq = len(self.sequence)
+        self.seq_index = np.arange(self.n_seq)        
+        seq_rot_map = {"X": (0.0, 1.0), "x": (0.0, 0.5), "Y": (0.25, 1.0),
+                       "y": (0.25, 0.5), "I": (0.0, 0.0)}
+        
+        def rot(angle, amp):
+            theta = amp * np.pi
+            if angle == 0.0: # rotation along x axis
+                return np.array([[1, 0, 0],
+                                 [0, np.cos(theta), -np.sin(theta)],
+                                 [0, np.sin(theta), np.cos(theta)]])
+            if angle == 0.25: # rotation along y axis
+                return np.array([[np.cos(theta), 0, np.sin(theta)],
+                                 [0, 1, 0],
+                                 [-np.sin(theta), 0, np.cos(theta)]])
+        
+        def pop(seq):          
+            state = np.array([0, 0, -1])
+            
+            for gate in seq:
+                state = np.matmul(rot(*seq_rot_map[gate]), state)
+            
+            return (state[-1] + 1) / 2
+
+        self.sequence_pop = np.array([pop(seq) for seq in self.sequence])
+
+        self.p0 = None
+        self.lb = None
+        self.ub = None
+
+        self.popt = None
+        self.pcov = None
+
+    def fit_func(self, n_vec, a, b):
+        '''
+        Fitting function for AllXY experiment.
+        '''
+
+        seq_pop = np.array(
+            [self.sequence_pop[int(np.round(n))] for n in n_vec])
+        return a * seq_pop + b
+
+    def _guess_init_params(self):
+        
+        high0 = np.mean(self.signal[self.sequence_pop == 1.0])
+        mid0 = np.mean(self.signal[self.sequence_pop == 0.5])
+        low0 = np.mean(self.signal[self.sequence_pop == 0.0])
+
+        mid = np.mean([high0, mid0, low0])
+
+        b0 = low0
+        a0 = 2 * (mid - b0)
+        
+        self.p0 = [a0, b0]
+
+    def analyze(self, p0=None, plot=True, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        if self.lb is not None and self.ub is not None:
+            popt, pcov = curve_fit(self.fit_func,
+                                   self.seq_index,
+                                   self.signal,
+                                   p0=self.p0, bounds=(self.lb, self.ub),
+                                   **kwargs)
+        else:
+            popt, pcov = curve_fit(self.fit_func,
+                                   self.seq_index,
+                                   self.signal,
+                                   p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
+
+    def _save_fit_results(self, popt, pcov):
+        super()._save_fit_results(popt, pcov)
+        a, b = self.popt
+        self.error_AllXY = np.sum(
+            np.abs(self.sequence_pop - (self.signal - b) / a))
+
+    def plot_result(self, fit_n_pts=1000):
+        super().plot_result()
+
+        fig = plt.figure()
+
+        # plot data
+        plt.plot(self.seq_index, self.signal, '.', color='black',
+                 label='Data')
+        plt.xticks(ticks=self.seq_index,
+                   labels=[''.join(seq) for seq in self.sequence])
+        plt.xlabel("Sequence")
+        plt.ylabel("Signal")
+
+        n_fit = np.linspace(self.seq_index[0], self.seq_index[-1], fit_n_pts)
+        
+        plt.plot(n_fit, self.fit_func(n_fit, *(self.p0)),
+                 label="Fit (init. param.)", lw=2, ls='--',
+                 color="orange")
+        plt.plot(n_fit, self.fit_func(n_fit, *(self.popt)),
+                 label="Fit (opt. param.)", lw=2, ls='-',
+                 color="red")
+    
+        plt.title(r"Normalized AllXY error: $\mathcal{E}_\mathrm{AllXY}$ = %.3f" % self.error_AllXY)
+        plt.legend(loc='upper left', fontsize='x-small')
+        fig.tight_layout()
+        plt.show()
 
 class EasyReadout:
     """
