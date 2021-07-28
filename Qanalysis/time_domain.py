@@ -826,30 +826,114 @@ class AllXY(TimeDomain):
         plt.show()
 
 class PulseTrain(TimeDomain):
-    def __init__(self, amps, repetition, signal):
+    def __init__(self, correction, repetition, signal):
         # initialize parameters
-        self.amps = amps
+        self.correction = correction
         self.repetition = repetition
         self.signal = signal
-        self.n_amps, self.n_pts = self.signal.shape
+        self.n_correction, self.n_pts = self.signal.shape
+
         self.is_analyzed = False
 
         self.p0 = None
-        self.lb = None
-        self.ub = None
-
         self.popt = None
         self.pcov = None
 
-    def fit_func(self, amps, amp_pi, A, B):
+    def fit_func(self, repetition, eps0, N1, *args):
         """
         Fitting Function for Pulse Train experiment.
         """
-        N = len(amps) // self.n_amps
         
-        return np.hstack([
-            A + B * 0.5 * (1 - np.cos(np.pi * amps[i * N:((i + 1) * N)] / amp_pi * (2 * self.repetition + 0.5)))
-            for i in range(self.n_amps)])
+        N = len(repetition) // self.n_correction
+        
+        A = args[:self.n_correction]
+        B = args[self.n_correction:]
+
+        decay = [np.exp(-repetition[(i * N):((i + 1) * N)] / N1)
+                 for i in range(self.n_correction)]
+        oscillation = [np.cos(np.pi * (1 + eps0) *
+                              (1 + self.correction[i]) *
+                              (2 * repetition[(i * N):((i + 1) * N)] + 0.5))
+                       for i in range(self.n_correction)]
+        return np.hstack([A[i] * decay[i] * oscillation[i] + B[i]
+                          for i in range(self.n_correction)])
+
+    def _guess_init_params(self):
+        B0 = np.mean(self.signal)        
+        mean_zero_signal = self.signal - B0
+        
+        idx = np.argmax(np.abs(mean_zero_signal.flatten()))
+        
+        a0 = np.abs(mean_zero_signal.flatten())[idx]
+        row, col = idx // self.n_pts, idx % self.n_pts
+        a1 = np.max(np.abs(mean_zero_signal)[:, -1])
+        N1 = - (self.repetition[-1] - self.repetition[col]) / np.log(a1 / a0)
+
+        A0 = - a0 * np.exp(self.repetition[col] / N1)
+        self.p0 = [0.0, N1, *([A0] * self.n_correction), *([B0] * self.n_correction)]
+
+    def analyze(self, p0=None, plot=True, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        popt, pcov = curve_fit(self.fit_func,
+                               np.hstack([self.repetition] * self.n_correction),
+                               self.signal.flatten(),
+                               p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
+
+    def _save_fit_results(self, popt, pcov):
+        super()._save_fit_results(popt, pcov)
+
+        self.eps0 = popt[0]
+        self.opt_correction = 1 / (1 + self.eps0) - 1
+        self.N1 = popt[1]
+
+        self.eps0_sigma_err = np.sqrt(pcov[0, 0])
+        self.N1_sigma_err = np.sqrt(pcov[1, 1])
+        self.opt_correction_sigma_err = (1 + self.opt_correction) ** 2 * self.eps0_sigma_err
+
+    def plot_result(self):
+        super().plot_result()
+
+        fig = plt.figure()
+
+        plt.subplot(1, 2, 1)
+        plt.pcolormesh(self.repetition, self.correction * 100, self.signal,
+                       shading='nearest', cmap=plt.get_cmap('jet'))
+        plt.axhline(self.opt_correction * 100, ls='--', color='black')
+        plt.xlabel('Number of Repetitions')
+        plt.ylabel(r'Amplitude Correction (%)')
+        cb = plt.colorbar()
+        cb.ax.set_title(r'Signal', fontsize='x-small')
+
+        n_fit = self.repetition
+        fit_ = self.fit_func(np.hstack([n_fit] * self.n_correction),
+                             *self.popt).reshape(self.n_correction, -1)
+        plt.subplot(1, 2, 2)
+        for k, acorr in enumerate(self.correction):
+            plt.plot(self.repetition, self.signal[k, :], '.', color='C%d' % k,
+                     label='Data (%.2f' % acorr + r' %)', ms=3)
+            plt.plot(n_fit, fit_[k, :], '-', color='C%d' % k,
+                     label='Fit (%.2f' % acorr + r' %)')
+        plt.xlabel('Number of Repetitions')
+        plt.ylabel('Signal')
+        # plt.legend(fontsize=4)
+
+        plt.suptitle('Opt. Amp. Correction: $%.3f \pm %.3f$' %
+                     (self.opt_correction * 100,
+                      2 * self.opt_correction_sigma_err * 100) + r' %')
+        plt.tight_layout()
+        plt.show()
 
 
 class RandomizedBenchmarking(TimeDomain):
@@ -973,7 +1057,7 @@ class RandomizedBenchmarking(TimeDomain):
         plt.plot(n_clifford_fit, self.fit_func(n_clifford_fit, *(self.popt_list[0])),
                  label=("Fit (Clifford): " +
                         r'$r_\mathrm{Clifford}=%.3f \pm %.3f $' % (self.r_clifford * 100,
-                                                                     self.r_clifford_sigma_err * 100) + '%'),
+                                                                   2 * self.r_clifford_sigma_err * 100) + '%'),
                  lw=2, ls='-', color="C0")
 
         
@@ -982,10 +1066,10 @@ class RandomizedBenchmarking(TimeDomain):
                 plt.plot(n_clifford_fit, self.fit_func(n_clifford_fit, *(self.popt_list[k + 1])),
                          label=("Fit (Interleaved " + self.interleaved_gates[k] + '): ' +
                                 r'$r_\mathrm{%s}=%.3f \pm %.3f $' %
-                                (self.interleaved_gates[k], self.r_gate[k] * 100, self.r_gate_sigma_err[k] * 100) + '%'),
+                                (self.interleaved_gates[k], self.r_gate[k] * 100, 2 * self.r_gate_sigma_err[k] * 100) + '%'),
                          lw=2, ls='-', color="C%d" % (k + 1))
 
-        plt.title('Randomized Benchmarking')
+        plt.title('Randomized Benchmarking (%d random sequences)' % self.n_sequence)
         plt.legend(loc='upper right', fontsize='x-small')
         plt.tight_layout()
         plt.show()
