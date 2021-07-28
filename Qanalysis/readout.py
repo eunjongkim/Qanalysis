@@ -656,11 +656,11 @@ class ReadoutTrace:
                      norm * self.downsample_factor * self.demod_factor)
 
         if self.num_of_states == 2:
-            self.optimal_integration_weight = self.weights[0, :] - self.weights[1, :]
+            self.optimal_integration_weight = self.weights[1, :] - self.weights[0, :]
             self.expected_demodulated_points = \
                 (np.conj(self.optimal_integration_weight) @ traces.T *
                  self.downsample_factor * self.demod_factor)
-            self.optimal_bias = self.bias[0] - self.bias[1]
+            self.optimal_bias = self.bias[1] - self.bias[0]
 
         if self.num_of_states > 2:
             ## Process optimal integration weight based on multiclass LDA for 
