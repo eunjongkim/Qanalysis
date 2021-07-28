@@ -448,8 +448,7 @@ class Ramsey(TimeDomain):
         plt.plot(time_fit / self.time_scaler,
                  self.fit_func(time_fit, *(self.p0)),
                  label="Fit (Init. Param.)", lw=2, ls='--', color="orange")
-        
-        
+
         _, T2_prefix = number_with_si_prefix(self.T2Ramsey)
         T2_scaler = si_prefix_to_scaler(T2_prefix)
         
@@ -466,7 +465,7 @@ class Ramsey(TimeDomain):
                       2 * self.delta_freq_sigma_err / delta_freq_scaler) +
                      delta_freq_prefix + 'Hz')
 
-        plt.title(T2_string + ',' + delta_freq_string)
+        plt.title(T2_string + ', ' + delta_freq_string)
         plt.legend(loc=0, fontsize='x-small')
         fig.tight_layout()
         plt.show()
@@ -824,6 +823,171 @@ class AllXY(TimeDomain):
         plt.title(r"Normalized AllXY error: $\mathcal{E}_\mathrm{AllXY}$ = %.3f" % self.error_AllXY)
         plt.legend(loc='upper left', fontsize='x-small')
         fig.tight_layout()
+        plt.show()
+
+class PulseTrain(TimeDomain):
+    def __init__(self, amps, repetition, signal):
+        # initialize parameters
+        self.amps = amps
+        self.repetition = repetition
+        self.signal = signal
+        self.n_amps, self.n_pts = self.signal.shape
+        self.is_analyzed = False
+
+        self.p0 = None
+        self.lb = None
+        self.ub = None
+
+        self.popt = None
+        self.pcov = None
+
+    def fit_func(self, amps, amp_pi, A, B):
+        """
+        Fitting Function for Pulse Train experiment.
+        """
+        N = len(amps) // self.n_amps
+        
+        return np.hstack([
+            A + B * 0.5 * (1 - np.cos(np.pi * amps[i * N:((i + 1) * N)] / amp_pi * (2 * self.repetition + 0.5)))
+            for i in range(self.n_amps)])
+
+
+class RandomizedBenchmarking(TimeDomain):
+    def __init__(self, n_clifford, signal, interleaved_signals=None,
+                 interleaved_gates=None, n_qubit=1):
+
+        self.n_clifford = n_clifford
+        self.signal = signal
+        self.n_sequence, self.n_max_clifford = signal.shape
+        self.mean_signal = np.mean(self.signal, axis=0)
+        
+        self.interleaved_signals = interleaved_signals
+        if self.interleaved_signals is not None:
+            self.n_interleaved_gates = len(self.interleaved_signals)
+            self.mean_interleaved_signals = [np.mean(sig, axis=0) for sig in self.interleaved_signals]
+            self.interleaved_gates = interleaved_gates
+            if self.interleaved_gates is None:
+                self.interleaved_gates = ['gate%d' % i for i in range(self.n_interleaved_gates)]
+
+        self.n_qubit = n_qubit
+
+        self.p0_list = []
+        self.popt_list = []
+        self.pcov_list = []
+
+    def fit_func(self, m, p, A, B):
+        '''
+        Fitting function for Randomized Benchmarking experiment.
+        '''
+        return A * p ** m + B
+
+    def _guess_init_params(self, mean_signal):
+        A0 = mean_signal[0] - mean_signal[-1]
+        B0 = mean_signal[-1]
+
+        mid_idx = np.argmin(np.abs(mean_signal - (A0 / 2 + B0)))
+        M1 = ((self.n_clifford[0] - self.n_clifford[mid_idx]) /
+               np.log(1 - (mean_signal[0] - mean_signal[mid_idx]) / A0))
+        p0 = np.exp(-1 / M1)
+        self.p0_list.append([p0, A0, B0])
+
+    def analyze(self, plot=True, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        # fitting of RB data
+        self._guess_init_params(self.mean_signal)
+        popt, pcov = curve_fit(self.fit_func, self.n_clifford,
+                               self.mean_signal, p0=self.p0_list[0], **kwargs)
+        self.popt_list.append(popt)
+        self.pcov_list.append(pcov)
+        
+        # fitting of interleaved RB data
+        if self.interleaved_signals is not None:
+            for idx in range(self.n_interleaved_gates):
+                self._guess_init_params(self.mean_interleaved_signals[idx])
+                popt, pcov = curve_fit(self.fit_func, self.n_clifford,
+                                       self.mean_interleaved_signals[idx],
+                                       p0=self.p0_list[1 + idx], **kwargs)
+                self.popt_list.append(popt)
+                self.pcov_list.append(pcov)              
+        
+        self.is_analyzed = True
+
+        # depolarizing parameter list
+        self.p_list = [popt[0] for popt in self.popt_list]
+        self.p_sigma_err_list = [np.sqrt(pcov[0, 0]) for pcov in self.pcov_list]
+        
+        # clifford gate set fidelity
+        self.r_clifford = (1 - self.p_list[0]) * (1 - 1 / 2 ** self.n_qubit)
+        self.r_clifford_sigma_err = self.p_sigma_err_list[0] * (1 - 1 / 2 ** self.n_qubit)
+        self.fidelity_clifford = 1 - self.r_clifford
+        self.fidelity_clifford_sigma_err = self.r_clifford_sigma_err
+
+        # target gate fidelity from IRB
+        self.r_gate = []
+        self.r_gate_sigma_err = []
+        self.fidelity_gate = []
+        self.fidelity_gate_sigma_err = []
+
+        if self.interleaved_signals is not None:
+            for gate_idx in range(1, self.n_interleaved_gates + 1):
+                r_gate = (1 - self.p_list[gate_idx] / self.p_list[0]) * (1 - 1 / 2 ** self.n_qubit)
+                r_gate_sigma_err = ((self.p_list[gate_idx] / self.p_list[0]) * (1 - 1 / 2 ** self.n_qubit) *
+                                    np.sqrt((self.p_sigma_err_list[gate_idx] / self.p_list[gate_idx]) ** 2 +
+                                            (self.p_sigma_err_list[0] / self.p_list[0]) ** 2))
+                self.r_gate.append(r_gate)
+                self.r_gate_sigma_err.append(r_gate_sigma_err)
+                self.fidelity_gate.append(1 - r_gate)
+                self.fidelity_gate_sigma_err.append(r_gate_sigma_err)
+        
+        if plot:
+            self.plot_result()
+
+    def plot_result(self, fit_n_pts=1000):
+        fig = plt.figure()
+
+        # plot data
+        for i in range(self.n_sequence):
+            plt.plot(self.n_clifford, self.signal[i, :], '.', color='C0',
+                     alpha=0.1, ms=2)
+        plt.plot(self.n_clifford, self.mean_signal, '.', color='C0',
+                 label='Avg. Data (Clifford)', markeredgecolor='black',
+                 markeredgewidth=0.8, ms=8)
+        
+        if self.interleaved_signals is not None:
+            for k in range(self.n_interleaved_gates):
+                for i in range(self.n_sequence):
+                    plt.plot(self.n_clifford, self.interleaved_signals[k][i, :],
+                             '.', color='C%d' % (k + 1), alpha=0.1, ms=2)
+                plt.plot(self.n_clifford, self.mean_interleaved_signals[k],
+                         '.', color='C%d' % (k + 1), markeredgecolor='black',
+                         markeredgewidth=0.8, ms=8,
+                         label='Avg. Data (Interleaved ' +  self.interleaved_gates[k] + ')')
+        
+        plt.xlabel("Number of Cliffords")
+        plt.ylabel("Signal")
+
+        n_clifford_fit = np.linspace(self.n_clifford[0], self.n_clifford[-1], fit_n_pts)
+        
+        plt.plot(n_clifford_fit, self.fit_func(n_clifford_fit, *(self.popt_list[0])),
+                 label=("Fit (Clifford): " +
+                        r'$r_\mathrm{Clifford}=%.3f \pm %.3f $' % (self.r_clifford * 100,
+                                                                     self.r_clifford_sigma_err * 100) + '%'),
+                 lw=2, ls='-', color="C0")
+
+        
+        if self.interleaved_signals is not None:
+            for k in range(self.n_interleaved_gates):
+                plt.plot(n_clifford_fit, self.fit_func(n_clifford_fit, *(self.popt_list[k + 1])),
+                         label=("Fit (Interleaved " + self.interleaved_gates[k] + '): ' +
+                                r'$r_\mathrm{%s}=%.3f \pm %.3f $' %
+                                (self.interleaved_gates[k], self.r_gate[k] * 100, self.r_gate_sigma_err[k] * 100) + '%'),
+                         lw=2, ls='-', color="C%d" % (k + 1))
+
+        plt.title('Randomized Benchmarking')
+        plt.legend(loc='upper right', fontsize='x-small')
+        plt.tight_layout()
         plt.show()
 
 class EasyReadout:
