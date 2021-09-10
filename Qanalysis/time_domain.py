@@ -20,9 +20,8 @@ def _get_envelope(s, t, f):
     _window = int(1 / (f * dt))
     _hann = windows.hann(_window * 2, sym=True)
     _hann = _hann / np.sum(_hann)
-
     envComplex = np.convolve(I + 1j * Q, _hann, 'same') * 2
-    return envComplex
+    return envComplex[:len(s)]
 
 class TimeDomain:
     def __init__(self, time, signal):
@@ -274,10 +273,10 @@ class PowerRabi(TimeDomain):
         self.p0 = [amp_pi0, a0, b0]
         if a0 > 0:
             self.lb = [1 / (2 * (F0 + dF)), 0.5 * a0, -np.inf]
-            self.ub = [1 / (2 * (F0 - dF)), np.inf, np.inf]
+            self.ub = [1 / (2 * max(F0 - dF, dF / 2)), np.inf, np.inf]
         else:
             self.lb = [1 / (2 * (F0 + dF)), -np.inf, -np.inf]
-            self.ub = [1 / (2 * (F0 - dF)), 0.5 * a0, np.inf]
+            self.ub = [1 / (2 * max(F0 - dF, dF / 2)), 0.5 * a0, np.inf]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
@@ -390,12 +389,41 @@ class Ramsey(TimeDomain):
         self.T2Ramsey = None
         self.delta_freq = None
 
-    def fit_func(self, t, T2, df, t0, a, b):
+    def fit_func(self, t, *args):
         """
         Fitting Function for Ramsey Fringes
             f(t) = a exp(-t/T2) cos[2π∆f(t-t0)] + b
         """
-        return a * np.exp(- t / T2) * np.cos(2 * np.pi * df * (t - t0)) + b
+        
+        if not self.fit_gaussian:
+            T2, df, t0, a, b = args
+            return a * np.exp(- t / T2) * np.cos(2 * np.pi * df * (t - t0)) + b
+        else:
+            Texp, Tgauss, df, t0, a, b = args
+            return a * np.exp(- t / Texp - (t / Tgauss) ** 2) * np.cos(2 * np.pi * df * (t - t0)) + b
+
+    def analyze(self, p0=None, plot=True, fit_gaussian=False, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        self.fit_gaussian = fit_gaussian
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        if self.lb is not None and self.ub is not None:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, bounds=(self.lb, self.ub),
+                                   **kwargs)
+        else:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
 
     def _guess_init_params(self):
         b0 = np.mean(self.signal)
@@ -415,24 +443,32 @@ class Ramsey(TimeDomain):
         env = np.abs(envComplex)
 
         if env[-1] < env[0]: # sanity check: make sure the envelope is decreasing over time
-            mid_idx = np.argmin(np.abs(env - 0.5 * (env[-1] + env[0])))
-            T20 = - (self.time[mid_idx] - self.time[0]) / np.log(env[mid_idx] / env[0])
+            # try:
+            # mid_idx = np.argmin(np.abs(env - 0.5 * (env[-1] + env[0])))
+            T20 = - (self.time[-1] - self.time[0]) / np.log(env[-1] / env[0])
         else:
             T20 = self.time[-1] - self.time[0]
-
-        self.p0 = [T20, δf0, t00, amax, b0]
-
-        # # lower and upper bounds for fit parameters
-        # self.lb = [0.0, δf0 - df, -np.inf, 0.5 * env, -np.inf]
-        # self.ub = [np.inf, δf0 + df, np.inf, amax * 1.1, np.inf]
+        
+        if not self.fit_gaussian:
+            self.p0 = [T20, δf0, t00, amax, b0]
+        else:
+            self.p0 = [2 * T20, T20, δf0, t00, amax, b0]
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
 
-        self.T2Ramsey = popt[0]
-        self.T2Ramsey_sigma_err = np.sqrt(pcov[0, 0])
-        self.delta_freq = popt[1]
-        self.delta_freq_sigma_err = np.sqrt(pcov[1, 1])
+        if not self.fit_gaussian:
+            self.T2Ramsey = popt[0]
+            self.T2Ramsey_sigma_err = np.sqrt(pcov[0, 0])
+            self.delta_freq = popt[1]
+            self.delta_freq_sigma_err = np.sqrt(pcov[1, 1])
+        else:
+            self.Texp = popt[0]
+            self.Texp_sigma_err = np.sqrt(pcov[0, 0])
+            self.Tgauss = popt[1]
+            self.Tgauss_sigma_err = np.sqrt(pcov[1, 1])
+            self.delta_freq = popt[2]
+            self.delta_freq_sigma_err = np.sqrt(pcov[2, 2])
 
     def plot_result(self, fit_n_pts=1000):
         super().plot_result()
@@ -443,29 +479,48 @@ class Ramsey(TimeDomain):
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
 
         plt.plot(time_fit / self.time_scaler,
-                 self.fit_func(time_fit, *(self.popt)),
-                 label="Fit (Opt. Param.)", lw=2, color="red")
-        plt.plot(time_fit / self.time_scaler,
                  self.fit_func(time_fit, *(self.p0)),
                  label="Fit (Init. Param.)", lw=2, ls='--', color="orange")
+        plt.plot(time_fit / self.time_scaler,
+                 self.fit_func(time_fit, *(self.popt)),
+                 label="Fit (Opt. Param.)", lw=2, color="red")
 
-        _, T2_prefix = number_with_si_prefix(self.T2Ramsey)
-        T2_scaler = si_prefix_to_scaler(T2_prefix)
-        
-        T2_string = (r"$T_2^*$ = %.4f $\pm$ %.4f " %
-                     (self.T2Ramsey / T2_scaler,
-                      2 * self.T2Ramsey_sigma_err / T2_scaler) +
-                      T2_prefix + 's')
+        if not self.fit_gaussian:
+            _, T2_prefix = number_with_si_prefix(self.T2Ramsey)
+            T2_scaler = si_prefix_to_scaler(T2_prefix)
+            
+            T2_string = (r"$T_2^*$ = %.3f $\pm$ %.3f " %
+                         (self.T2Ramsey / T2_scaler,
+                          2 * self.T2Ramsey_sigma_err / T2_scaler) +
+                          T2_prefix + 's')
+        else:
+            _, Texp_prefix = number_with_si_prefix(self.Texp)
+            Texp_scaler = si_prefix_to_scaler(Texp_prefix)
+            
+            Texp_string = (r"$T_\mathrm{exp}$ = %.3f $\pm$ %.3f " %
+                         (self.Texp / Texp_scaler,
+                          2 * self.Texp_sigma_err / Texp_scaler) +
+                          Texp_prefix + 's')
+            
+            _, Tgauss_prefix = number_with_si_prefix(self.Tgauss)
+            Tgauss_scaler = si_prefix_to_scaler(Tgauss_prefix)
+            
+            Tgauss_string = (r"$T_\mathrm{gauss}$ = %.3f $\pm$ %.3f " %
+                         (self.Tgauss / Tgauss_scaler,
+                          2 * self.Tgauss_sigma_err / Tgauss_scaler) +
+                          Tgauss_prefix + 's')
+            
+            T2_string = ', '.join([Texp_string, Tgauss_string])
 
         _, delta_freq_prefix = number_with_si_prefix(self.delta_freq)
         delta_freq_scaler = si_prefix_to_scaler(delta_freq_prefix)
 
-        delta_freq_string = (r"$\Delta f$ = %.4f $\pm$ %.4f " %
+        delta_freq_string = (r"$\Delta f$ = %.3f $\pm$ %.3f " %
                      (self.delta_freq / delta_freq_scaler,
                       2 * self.delta_freq_sigma_err / delta_freq_scaler) +
                      delta_freq_prefix + 'Hz')
 
-        plt.title(T2_string + ', ' + delta_freq_string)
+        plt.title(', '.join([T2_string, delta_freq_string]), fontsize='small')
         plt.legend(loc=0, fontsize='x-small')
         fig.tight_layout()
         plt.show()
@@ -529,19 +584,47 @@ class RamseyWithGaussian(TimeDomain):
 
 # TODO: RamseyWithBeating(TimeDomain):
 
-class SpinEcho(TimeDomain):
+class HahnEcho(TimeDomain):
     """
-    Class to analyze and visualize spin echo decay (T2 Hahn echo experiment) data.
+    Class to analyze and visualize Hahn echo decay (T2 Hahn echo experiment) data.
     """
     def __init__(self, time, signal):
         super().__init__(time, signal)
         self.T2Echo = None
 
-    def fit_func(self, t, T2, a, b):
+    def fit_func(self, t, *args):
         """
-        Fitting Function for T2
+        Fitting Function for Hahn Echo
         """
-        return a * np.exp(- t / T2) + b
+        if not self.fit_gaussian:
+            T2, a, b = args
+            return a * np.exp(- t / T2) + b
+        else:
+            Texp, Tgauss, a, b = args
+            return a * np.exp(- t / Texp - (t / Tgauss) ** 2) + b
+
+    def analyze(self, p0=None, plot=True, fit_gaussian=False, **kwargs):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        self.fit_gaussian = fit_gaussian
+        # set initial fit parameters
+        self._set_init_params(p0)
+        # perform fitting
+        if self.lb is not None and self.ub is not None:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, bounds=(self.lb, self.ub),
+                                   **kwargs)
+        else:
+            popt, pcov = curve_fit(self.fit_func, self.time, self.signal,
+                                   p0=self.p0, **kwargs)
+        self.is_analyzed = True
+
+        # save fit results
+        self._save_fit_results(popt, pcov)
+
+        if plot:
+            self.plot_result()
 
     def _guess_init_params(self):
         a0 = self.signal[0] - self.signal[-1]
@@ -551,13 +634,33 @@ class SpinEcho(TimeDomain):
         T20 = ((self.time[0] - self.time[mid_idx]) /
                np.log(1 - (self.signal[0] - self.signal[mid_idx]) / a0))
 
-        self.p0 = [T20, a0, b0]
+        if not self.fit_gaussian:
+            self.p0 = [T20, a0, b0]
+        else:
+            N_linear = 10
+            slope, _ = np.polyfit(self.time[:N_linear], self.signal[:N_linear], 1)
+            Texp0 = 1 / np.abs(slope / a0)
+            
+            t_mid = self.time[mid_idx]
+            Tgauss0 = t_mid / np.sqrt(np.log(2) - t_mid / Texp0)           
+            
+            self.p0 = [Texp0, Tgauss0, a0, b0]
+
+            self.lb = [0.5 * Texp0, 0.5 * Tgauss0, -np.inf, -np.inf]
+            self.ub = [1.5 * Texp0, 1.5 * Tgauss0, np.inf, np.inf]
+
 
     def _save_fit_results(self, popt, pcov):
         super()._save_fit_results(popt, pcov)
-        self.T2Echo = popt[0]
-        self.T2Echo_sigma_err = np.sqrt(pcov[0, 0])
-
+        if not self.fit_gaussian:
+            self.T2Echo = popt[0]
+            self.T2Echo_sigma_err = np.sqrt(pcov[0, 0])
+        else:
+            self.Texp = popt[0]
+            self.Texp_sigma_err = np.sqrt(pcov[0, 0])
+            self.Tgauss = popt[1]
+            self.Tgauss_sigma_err = np.sqrt(pcov[1, 1])
+            
     def plot_result(self, fit_n_pts=1000):
         super().plot_result()
 
@@ -565,21 +668,36 @@ class SpinEcho(TimeDomain):
         fig = self._plot_base()
 
         time_fit = np.linspace(self.time[0], self.time[-1], fit_n_pts)
-        
+
         plt.plot(time_fit / self.time_scaler,
                  self.fit_func(time_fit, *(self.p0)),
                  label="Fit (Init. Param.)", ls='--', lw=2, color="orange")
         plt.plot(time_fit / self.time_scaler,
                  self.fit_func(time_fit, *(self.popt)),
                  label="Fit (Opt. Param.)", lw=2, color="red")
-        
-        _, T2Echo_prefix = number_with_si_prefix(self.T2Echo)
-        T2Echo_scaler = si_prefix_to_scaler(T2Echo_prefix)
 
-        plt.title(r"$T_{2E}$ = %.5f $\pm$ %.5f " %
-                  (self.T2Echo / T2Echo_scaler,
-                   2 * self.T2Echo_sigma_err / T2Echo_scaler) +
-                  T2Echo_prefix + 's')
+        if not self.fit_gaussian:
+            _, T2Echo_prefix = number_with_si_prefix(self.T2Echo)
+            T2Echo_scaler = si_prefix_to_scaler(T2Echo_prefix)
+            
+            T2_string = (r"$T_{2E}$ = %.3f $\pm$ %.3f " % (self.T2Echo / T2Echo_scaler,
+                                                           2 * self.T2Echo_sigma_err / T2Echo_scaler) +
+                         T2Echo_prefix + 's')
+        else:
+            _, Texp_prefix = number_with_si_prefix(self.Texp)
+            Texp_scaler = si_prefix_to_scaler(Texp_prefix)
+
+            _, Tgauss_prefix = number_with_si_prefix(self.Tgauss)
+            Tgauss_scaler = si_prefix_to_scaler(Tgauss_prefix)
+
+            Texp_string = (r"$T_\mathrm{exp}$ = %.3f $\pm$ %.3f " % (self.Texp / Texp_scaler,
+                                                                     2 * self.Texp_sigma_err / Texp_scaler) +
+                           Texp_prefix + 's')
+            Tgauss_string = (r"$T_\mathrm{gauss}$ = %.3f $\pm$ %.3f " % (self.Tgauss / Tgauss_scaler,
+                                                                         2 * self.Tgauss_sigma_err / Tgauss_scaler) +
+                             Tgauss_prefix + 's')
+            T2_string = ', '.join([Texp_string, Tgauss_string])
+        plt.title(T2_string, fontsize='small')
         fig.tight_layout()
         plt.show()
 
@@ -870,7 +988,11 @@ class PulseTrain(TimeDomain):
         N1 = - (self.repetition[-1] - self.repetition[col]) / np.log(a1 / a0)
 
         A0 = - a0 * np.exp(self.repetition[col] / N1)
-        self.p0 = [0.0, N1, *([A0] * self.n_correction), *([B0] * self.n_correction)]
+        
+        zero_idx = np.argmin(np.var(self.signal, axis=-1))
+        
+        self.p0 = [-self.correction[zero_idx],
+                   N1, *([A0] * self.n_correction), *([B0] * self.n_correction)]
 
     def analyze(self, p0=None, plot=True, **kwargs):
         """
@@ -1070,7 +1192,7 @@ class RandomizedBenchmarking(TimeDomain):
                          lw=2, ls='-', color="C%d" % (k + 1))
 
         plt.title('Randomized Benchmarking (%d random sequences)' % self.n_sequence)
-        plt.legend(loc='upper right', fontsize='x-small')
+        plt.legend(loc='best', fontsize='x-small')
         plt.tight_layout()
         plt.show()
 
