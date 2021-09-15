@@ -787,8 +787,6 @@ class SingleShotLDA:
 #     # with special plotting and Gaussian fitting
     
 
-
->>>>>>> 774f3a101e7cd6be8740becf93dfacbfed0e7319
 class ReadoutTrace:
     def __init__(self, adc, frequency: float, adc_sample_rate: float=1e9,
                  downsample_factor: int=4, timediff: int=0,
