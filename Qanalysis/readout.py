@@ -9,7 +9,11 @@ from pandas import DataFrame
 from scipy.optimize import least_squares
 from scipy.stats import multivariate_normal
 from scipy.special import erfc
-from sklearn import mixture
+
+from sklearn.mixture import GaussianMixture
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.metrics import confusion_matrix
+
 import matplotlib.pyplot as plt
 from itertools import combinations
 import numpy as np
@@ -267,9 +271,9 @@ class SingleShotGaussian:
         x = DataFrame(data, columns=['I', 'Q'])
 
         # train the dataset with Gaussian Mixture model
-        gmm = mixture.GaussianMixture(n_components=self.num_of_states,
-                                      covariance_type='spherical', tol=1e-12,
-                                      reg_covar=1e-12).fit(x)
+        gmm = GaussianMixture(n_components=self.num_of_states,
+                              covariance_type='spherical', tol=1e-12,
+                              reg_covar=1e-12).fit(x)
         # predict the states
         pr_state_ = gmm.predict(x).reshape(self.num_of_states, self.num_of_points)
         bincounts = self._count_occurences(pr_state_)
@@ -566,9 +570,225 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
         return fig
 
+class SingleShotLDA:
+    def __init__(self, signal):
+        self.dtype = signal.dtype
 
-# class SingleShotLDA:
+        if len(signal.shape) == 2:
+            self.n_state, self.n_pts = signal.shape
+            self.n_res_ch = 1
+            self.signal = np.array([signal])
+        elif len(signal.shape) == 3:
+            self.n_res_ch, self.n_state, self.n_pts = signal.shape
+            self.signal = signal
+        else:
+            raise ValueError('The `signal` must be 2 or 3-dimensional.')
+
+        self.is_analyzed = False
+        self.means = None
+        self.variances = None
+
+        self.state_prediction = None
+        self.confusion = None
+        self.fidelity = None
+
+        self.lda = LinearDiscriminantAnalysis(tol=1e-15,
+                                              store_covariance=True)
+
+    def project(self, signal):
+        return np.real(np.dot(np.conj(self.coef), signal)) + self.intercept
     
+    def predict(self, signal):
+        if self.n_state == 2:
+            return 1 * (self.project(signal) > 0)
+        else:
+            return np.argmax(self.project(signal), axis=0)
+
+    def _analyze_outliers(self):
+        
+        self.p_outlier = np.zeros((self.n_res_ch,
+                                   self.n_state), dtype=float)
+        
+        if self.dtype == complex:
+            for j in range(self.n_res_ch):
+                sigma = np.sqrt(self.variances[j])
+                outliers = np.array([
+                    np.abs(self.signal[j, :, :] - self.means[j, k]) > (self.outlier_n_sigma * sigma)
+                    for k in range(self.n_state)])
+                self.p_outlier[j, :] = np.mean(np.all(outliers, axis=0),
+                                               axis=-1)
+    
+    def _analyze_lda(self):
+        if self.dtype == float:
+            real_signal = self.signal
+        elif self.dtype == complex:
+            real_signal = np.zeros(
+                (2 * self.n_res_ch, self.n_state, self.n_pts), dtype=float)
+            for i in range(self.n_res_ch):
+                real_signal[2 * i, :, :] = self.signal[i, :, :].real
+                real_signal[2 * i + 1, :, :] = self.signal[i, :, :].imag
+
+        labels = np.outer(np.arange(self.n_state, dtype=int),
+                          np.ones(self.n_pts, dtype=int)).flatten()
+        data = real_signal.reshape(-1, self.n_state * self.n_pts).T
+
+        self.lda.fit(data, labels)
+        norm = np.max([*np.abs(self.lda.coef_).flatten(),
+                       *np.abs(self.lda.intercept_).flatten()])
+
+        if self.dtype == float:
+            self.means = self.lda.means_.T
+            self.variances = np.diag(self.lda.covariance_)
+
+        elif self.dtype == complex:
+            self.means = np.array([
+                [(self.lda.means_[j, 2 * k] + 1j * self.lda.means_[j, 2 * k + 1])
+                  for j in range(self.n_state)] for k in range(self.n_res_ch)])
+            self.variances = np.mean(
+                np.diag(self.lda.covariance_).reshape(-1, 2), axis=1)
+        
+        
+        self.coef = self.lda.coef_ / norm
+        if self.dtype == complex:
+            self.coef = (self.coef[:, 0:(2 * self.n_res_ch):2] +
+                         1j * self.coef[:, 1:(2 * self.n_res_ch):2])
+        self.intercept = self.lda.intercept_ / norm
+
+        self.projected_signal = np.array([
+            [self.project(self.signal[:, j, k]) for k in range(self.n_pts)]
+            for j in range(self.n_state)])
+        self.n_proj = len(self.intercept)
+        if self.n_state == 2:
+            self.prediction = 1 * (self.projected_signal > 0)[:, :, 0]
+        else:
+            self.prediction = np.argmax(self.projected_signal, axis=-1)
+        
+        # confusion matrix: row idx - prepared label, col idx - predicted label
+        self.confusion = confusion_matrix(labels,
+                                          self.prediction.flatten(),
+                                          normalize='pred')
+        self.fidelity = np.mean(np.diag(self.confusion))
+
+    def analyze(self, plot: bool=True, outlier_n_sigma: float=3.0):
+        self.outlier_n_sigma = outlier_n_sigma
+        
+        # LDA analysis
+        self._analyze_lda()
+
+        # outlier analysis
+        self._analyze_outliers()
+
+        self.is_analyzed = True
+
+        if plot:
+            self.plot_result()
+
+    def plot_result(self):
+        fig = plt.figure(constrained_layout=True)
+
+        # gridspec
+        gs = fig.add_gridspec(2, 1)
+        # subgridspec
+        sgs0 = gs[0].subgridspec(1, self.n_res_ch)
+        sgs1 = gs[1].subgridspec(1, self.n_proj)
+
+        
+        data_axes = [fig.add_subplot(sgs0[j]) for j in range(self.n_res_ch)]
+        proj_axes = [fig.add_subplot(sgs1[l]) for l in range(self.n_proj)]
+
+        state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
+        data_ms = np.sqrt(10000 / self.n_pts)
+
+        if self.dtype == complex:
+            for j in range(self.n_res_ch):
+                for k in range(self.n_state):
+                    data_axes[j].plot(self.signal[j, k, :].real,
+                                      self.signal[j, k, :].imag,
+                             '.', ms=data_ms, alpha=0.3)
+                for k in range(self.n_state):
+                    mu = self.means[j, k]
+                    sigma = np.sqrt(self.variances[j])
+
+                    data_axes[j].plot(mu.real, mu.imag,
+                                      marker=state_markers[k],
+                                      ms=5, color='black')
+                    
+                    circ_n_sigma = plt.Circle((mu.real, mu.imag),
+                                              self.outlier_n_sigma * sigma, lw=1,
+                                              color='C%d' % k, fill=False)
+                    data_axes[j].add_artist(circ_n_sigma)
+
+                data_axes[j].set_xlabel(f'$I_{j}$')#, fontsize='small')
+                data_axes[j].set_ylabel(f'$Q_{j}$')#, fontsize='small')
+                data_axes[j].tick_params(axis='both', labelsize='small')
+                data_axes[j].axis('equal')
+                data_axes[j].set_title('Signal %d' % j, fontsize='medium')
+        elif self.dtype == float:
+            # plot histogram
+
+            pass
+
+        n_proj = self.projected_signal.shape[-1]
+        for l in range(n_proj):
+            p_sig = self.projected_signal[:, :, l]
+            _hist_min_max = np.min(p_sig), np.max(p_sig)
+
+            hists = []
+            s_edges = None
+            for k in range(self.n_state):
+                H, s_edges = np.histogram(p_sig[k, :], bins=50,
+                                          range=_hist_min_max, density=False)
+                hists.append(H)
+            hist_range = (s_edges[1:] + s_edges[:-1]) / 2
+            width = hist_range[1] - hist_range[0]
+            for k in range(self.n_state):
+                proj_axes[l].bar(hist_range, hists[k], width=width,
+                                 color="C%d" % k, alpha=0.5,
+                                 label=r"$|%d\rangle$ Data" % k)
+            proj_axes[l].set_xlabel(r'$X_{%d}$' % l)
+            if l == 0:
+                proj_axes[l].set_ylabel('Counts')
+            proj_axes[l].set_yscale("log")
+            proj_axes[l].set_ylim([1e0, np.max(np.array(hists))])
+            proj_axes[l].set_title('Projected Signal %d' % l, fontsize='medium')
+        plt.figure()
+        conf_matrix = np.copy(self.confusion)
+        size = conf_matrix.shape[0]
+        diag_idx = [n + n * size for n in range(size)]
+        vals = np.delete(conf_matrix.flatten(), diag_idx)
+        
+        vmin_offdiag, vmax_offdiag = np.min(vals), np.max(vals)
+        ax0 = sns.heatmap(conf_matrix, cmap='Reds', annot=True,
+                          vmin=vmin_offdiag, vmax=vmax_offdiag)
+        cbar0 = ax0.collections[0].colorbar
+        cbar0.ax.tick_params(labelsize='small')
+        
+        # fill in diagonal part of confusion matrix with a different colormap
+        diag_nan = np.full_like(conf_matrix, np.nan, dtype=float)
+        np.fill_diagonal(diag_nan, np.diag(conf_matrix))
+        
+        ax = sns.heatmap(diag_nan, cmap='Blues', annot=True, vmin=0, vmax=1)
+        cbar = ax.collections[1].colorbar
+        cbar.ax.tick_params(labelsize='small')
+        plt.xticks(fontsize='small')
+        plt.yticks(fontsize='small')
+        ax.set_title(r'Readout Fidelity $\mathcal{F}=%.3f$' % self.fidelity)
+        ax.set_xlabel('Prediction')
+        ax.set_ylabel('Preparation')
+        
+        labels = [r'$|%d\rangle$' % i for i in range(self.n_state)]
+
+        ax.xaxis.set_ticklabels(labels)
+        ax.yaxis.set_ticklabels(labels)
+        
+        plt.tight_layout()
+
+# class SingleShotLDATwoStates(SingleShotLDA):
+#     # with special plotting and Gaussian fitting
+    
+
+
+>>>>>>> 774f3a101e7cd6be8740becf93dfacbfed0e7319
 class ReadoutTrace:
     def __init__(self, adc, frequency: float, adc_sample_rate: float=1e9,
                  downsample_factor: int=4, timediff: int=0,
