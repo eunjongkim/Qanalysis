@@ -435,7 +435,7 @@ class Ramsey(TimeDomain):
                                d=(self.time[1] - self.time[0]))
         δf0 = freq[np.argmax(np.abs(np.fft.rfft(self.signal - np.mean(self.signal))))]
         df = freq[1] - freq[0] # frequency step of FFT
-        
+
         # in-phase and quadrature envelope
         envComplex = _get_envelope(signal0, self.time, δf0)
         t00 = - np.angle(np.sum(envComplex)) / (2 * np.pi * δf0)
@@ -448,7 +448,7 @@ class Ramsey(TimeDomain):
             T20 = - (self.time[-1] - self.time[0]) / np.log(env[-1] / env[0])
         else:
             T20 = self.time[-1] - self.time[0]
-        
+
         if not self.fit_gaussian:
             self.p0 = [T20, δf0, t00, amax, b0]
         else:
