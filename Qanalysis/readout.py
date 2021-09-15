@@ -604,8 +604,22 @@ class SingleShotLDA:
             return 1 * (self.project(signal) > 0)
         else:
             return np.argmax(self.project(signal), axis=0)
+
+    def _analyze_outliers(self):
         
-    def analyze(self, plot: bool=True, outlier_n_sigma: float=3.0):
+        self.p_outlier = np.zeros((self.n_res_ch,
+                                   self.n_state), dtype=float)
+        
+        if self.dtype == complex:
+            for j in range(self.n_res_ch):
+                sigma = np.sqrt(self.variances[j])
+                outliers = np.array([
+                    np.abs(self.signal[j, :, :] - self.means[j, k]) > (self.outlier_n_sigma * sigma)
+                    for k in range(self.n_state)])
+                self.p_outlier[j, :] = np.mean(np.all(outliers, axis=0),
+                                               axis=-1)
+    
+    def _analyze_lda(self):
         if self.dtype == float:
             real_signal = self.signal
         elif self.dtype == complex:
@@ -625,17 +639,22 @@ class SingleShotLDA:
 
         if self.dtype == float:
             self.means = self.lda.means_.T
+            self.variances = np.diag(self.lda.covariance_)
+
         elif self.dtype == complex:
             self.means = np.array([
                 [(self.lda.means_[j, 2 * k] + 1j * self.lda.means_[j, 2 * k + 1])
                   for j in range(self.n_state)] for k in range(self.n_res_ch)])
-              
+            self.variances = np.mean(
+                np.diag(self.lda.covariance_).reshape(-1, 2), axis=1)
+        
+        
         self.coef = self.lda.coef_ / norm
         if self.dtype == complex:
             self.coef = (self.coef[:, 0:(2 * self.n_res_ch):2] +
                          1j * self.coef[:, 1:(2 * self.n_res_ch):2])
         self.intercept = self.lda.intercept_ / norm
-    
+
         self.projected_signal = np.array([
             [self.project(self.signal[:, j, k]) for k in range(self.n_pts)]
             for j in range(self.n_state)])
@@ -650,6 +669,16 @@ class SingleShotLDA:
                                           self.prediction.flatten(),
                                           normalize='pred')
         self.fidelity = np.mean(np.diag(self.confusion))
+
+    def analyze(self, plot: bool=True, outlier_n_sigma: float=3.0):
+        self.outlier_n_sigma = outlier_n_sigma
+        
+        # LDA analysis
+        self._analyze_lda()
+
+        # outlier analysis
+        self._analyze_outliers()
+
         self.is_analyzed = True
 
         if plot:
@@ -678,10 +707,18 @@ class SingleShotLDA:
                                       self.signal[j, k, :].imag,
                              '.', ms=data_ms, alpha=0.3)
                 for k in range(self.n_state):
-                    data_axes[j].plot(self.means[j, k].real,
-                                      self.means[j, k].imag,
+                    mu = self.means[j, k]
+                    sigma = np.sqrt(self.variances[j])
+
+                    data_axes[j].plot(mu.real, mu.imag,
                                       marker=state_markers[k],
                                       ms=5, color='black')
+                    
+                    circ_n_sigma = plt.Circle((mu.real, mu.imag),
+                                              self.outlier_n_sigma * sigma, lw=1,
+                                              color='C%d' % k, fill=False)
+                    data_axes[j].add_artist(circ_n_sigma)
+
                 data_axes[j].set_xlabel(f'$I_{j}$')#, fontsize='small')
                 data_axes[j].set_ylabel(f'$Q_{j}$')#, fontsize='small')
                 data_axes[j].tick_params(axis='both', labelsize='small')
