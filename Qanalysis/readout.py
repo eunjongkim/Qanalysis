@@ -573,8 +573,8 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
 class SingleShotLDA:
     def __init__(self, signal):
-        # An array of readout signals (either complex or  when the qubit was initialized to state 0, state 1, ...
         self.dtype = signal.dtype
+
         if len(signal.shape) == 2:
             self.n_state, self.n_pts = signal.shape
             self.n_res_ch = 1
@@ -632,22 +632,22 @@ class SingleShotLDA:
               
         self.coef = self.lda.coef_ / norm
         if self.dtype == complex:
-            self.coef = (self.coef[0:(2 * self.n_res_ch):2] +
-                         1j * self.coef[1:(2 * self.n_res_ch):2])
+            self.coef = (self.coef[:, 0:(2 * self.n_res_ch):2] +
+                         1j * self.coef[:, 1:(2 * self.n_res_ch):2])
         self.intercept = self.lda.intercept_ / norm
-
+    
         self.projected_signal = np.array([
             [self.project(self.signal[:, j, k]) for k in range(self.n_pts)]
             for j in range(self.n_state)])
-        
+        self.n_proj = len(self.intercept)
         if self.n_state == 2:
-            self.prediction = 1 * (self.projected_signal > 0)[0, :]
+            self.prediction = 1 * (self.projected_signal > 0)[:, :, 0]
         else:
-            self.prediction = np.argmax(self.projected_signal, axis=0)
+            self.prediction = np.argmax(self.projected_signal, axis=-1)
         
         # confusion matrix: row idx - prepared label, col idx - predicted label
         self.confusion = confusion_matrix(labels,
-                                          self.prediction,
+                                          self.prediction.flatten(),
                                           normalize='pred')
         self.fidelity = np.mean(np.diag(self.confusion))
         self.is_analyzed = True
@@ -656,50 +656,65 @@ class SingleShotLDA:
             self.plot_result()
 
     def plot_result(self):
-        plt.figure()
+        fig = plt.figure(constrained_layout=True)
+
+        # gridspec
+        gs = fig.add_gridspec(2, 1)
+        # subgridspec
+        sgs0 = gs[0].subgridspec(1, self.n_res_ch)
+        sgs1 = gs[1].subgridspec(1, self.n_proj)
+
         
+        data_axes = [fig.add_subplot(sgs0[j]) for j in range(self.n_res_ch)]
+        proj_axes = [fig.add_subplot(sgs1[l]) for l in range(self.n_proj)]
+
         state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
         data_ms = np.sqrt(10000 / self.n_pts)
 
         if self.dtype == complex:
             for j in range(self.n_res_ch):
-                plt.subplot(2, self.n_res_ch, j + 1)
                 for k in range(self.n_state):
-                    plt.plot(self.signal[j, k, :].real,
-                             self.signal[j, k, :].imag,
+                    data_axes[j].plot(self.signal[j, k, :].real,
+                                      self.signal[j, k, :].imag,
                              '.', ms=data_ms, alpha=0.3)
                 for k in range(self.n_state):
-                    plt.plot(self.means[k].real, self.means[k].imag,
-                             marker=state_markers[k], ms=5, color='black')
-
-                plt.xlabel(f'$I_{j}$', fontsize='x-small')
-                plt.ylabel(f'$Q_{j}$', fontsize='x-small')
-                plt.axis('equal')
+                    data_axes[j].plot(self.means[j, k].real,
+                                      self.means[j, k].imag,
+                                      marker=state_markers[k],
+                                      ms=5, color='black')
+                data_axes[j].set_xlabel(f'$I_{j}$')#, fontsize='small')
+                data_axes[j].set_ylabel(f'$Q_{j}$')#, fontsize='small')
+                data_axes[j].tick_params(axis='both', labelsize='small')
+                data_axes[j].axis('equal')
+                data_axes[j].set_title('Signal %d' % j, fontsize='medium')
         elif self.dtype == float:
             # plot histogram
 
             pass
 
-        n_proj = self.projected_signal.shape[0]
+        n_proj = self.projected_signal.shape[-1]
         for l in range(n_proj):
-            plt.subplot(2, n_proj, n_proj + l + 1)
-            p_sig = self.projected_signal[l, :, :]
+            p_sig = self.projected_signal[:, :, l]
             _hist_min_max = np.min(p_sig), np.max(p_sig)
 
             hists = []
             s_edges = None
             for k in range(self.n_state):
-                H, s_edges = np.histogram(p_sig, bins=50,
-                                          range=_hist_min_max, density=True)
+                H, s_edges = np.histogram(p_sig[k, :], bins=50,
+                                          range=_hist_min_max, density=False)
                 hists.append(H)
             hist_range = (s_edges[1:] + s_edges[:-1]) / 2
             width = hist_range[1] - hist_range[0]
             for k in range(self.n_state):
-                plt.bar(hist_range, hists[k], width=width,
-                        color="C%d" % k, alpha=0.5,
-                        label=r"$|%d\rangle$ Data" % k)
-            plt.xlabel('Projection %d' % l)
-
+                proj_axes[l].bar(hist_range, hists[k], width=width,
+                                 color="C%d" % k, alpha=0.5,
+                                 label=r"$|%d\rangle$ Data" % k)
+            proj_axes[l].set_xlabel(r'$X_{%d}$' % l)
+            if l == 0:
+                proj_axes[l].set_ylabel('Counts')
+            proj_axes[l].set_yscale("log")
+            proj_axes[l].set_ylim([1e0, np.max(np.array(hists))])
+            proj_axes[l].set_title('Projected Signal %d' % l, fontsize='medium')
         plt.figure()
         conf_matrix = np.copy(self.confusion)
         size = conf_matrix.shape[0]
@@ -707,21 +722,29 @@ class SingleShotLDA:
         vals = np.delete(conf_matrix.flatten(), diag_idx)
         
         vmin_offdiag, vmax_offdiag = np.min(vals), np.max(vals)
-        ax0 = sns.heatmap(conf_matrix, cmap='Reds',
+        ax0 = sns.heatmap(conf_matrix, cmap='Reds', annot=True,
                           vmin=vmin_offdiag, vmax=vmax_offdiag)
         cbar0 = ax0.collections[0].colorbar
-        cbar0.ax.tick_params(labelsize='x-small')
+        cbar0.ax.tick_params(labelsize='small')
         
         # fill in diagonal part of confusion matrix with a different colormap
         diag_nan = np.full_like(conf_matrix, np.nan, dtype=float)
         np.fill_diagonal(diag_nan, np.diag(conf_matrix))
         
-        ax = sns.heatmap(diag_nan, cmap='Blues', vmin=0, vmax=1)
+        ax = sns.heatmap(diag_nan, cmap='Blues', annot=True, vmin=0, vmax=1)
         cbar = ax.collections[1].colorbar
-        cbar.ax.tick_params(labelsize='x-small')
-        plt.xticks(fontsize='x-small')
-        plt.yticks(fontsize='x-small')
-        ax.set_title(r'$\mathcal{F}=%.3f$' % self.fidelity)
+        cbar.ax.tick_params(labelsize='small')
+        plt.xticks(fontsize='small')
+        plt.yticks(fontsize='small')
+        ax.set_title(r'Readout Fidelity $\mathcal{F}=%.3f$' % self.fidelity)
+        ax.set_xlabel('Prediction')
+        ax.set_ylabel('Preparation')
+        
+        labels = [r'$|%d\rangle$' % i for i in range(self.n_state)]
+
+        ax.xaxis.set_ticklabels(labels)
+        ax.yaxis.set_ticklabels(labels)
+        
         plt.tight_layout()
 
 # class SingleShotLDATwoStates(SingleShotLDA):
