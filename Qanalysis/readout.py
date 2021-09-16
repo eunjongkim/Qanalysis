@@ -19,6 +19,7 @@ from itertools import combinations
 import numpy as np
 import seaborn as sns
 from scipy.signal import windows
+from scipy.stats import norm
 
 
 class SingleShotGaussian:
@@ -572,7 +573,7 @@ class SingleShotGaussianTwoStates(SingleShotGaussian):
 
 class SingleShotLDA:
     def __init__(self, signal):
-        self.dtype = signal.dtype
+        self.is_complex = np.iscomplexobj(signal)
 
         if len(signal.shape) == 2:
             self.n_state, self.n_pts = signal.shape
@@ -608,61 +609,64 @@ class SingleShotLDA:
         
         self.p_outlier = np.zeros((self.n_res_ch,
                                    self.n_state), dtype=float)
-        
-        if self.dtype == complex:
-            for j in range(self.n_res_ch):
-                sigma = np.sqrt(self.variances[j])
-                outliers = np.array([
-                    np.abs(self.signal[j, :, :] - self.means[j, k]) > (self.outlier_n_sigma * sigma)
-                    for k in range(self.n_state)])
-                self.p_outlier[j, :] = np.mean(np.all(outliers, axis=0),
-                                               axis=-1)
+
+        for j in range(self.n_res_ch):
+            sigma = np.sqrt(self.variances[j])
+            outliers = np.array([
+                np.abs(self.signal[j, :, :] - self.means[j, k]) > (self.outlier_n_sigma * sigma)
+                for k in range(self.n_state)])
+            self.p_outlier[j, :] = np.mean(np.all(outliers, axis=0),
+                                           axis=-1)
     
     def _analyze_lda(self):
-        if self.dtype == float:
-            real_signal = self.signal
-        elif self.dtype == complex:
+        if self.is_complex:
             real_signal = np.zeros(
                 (2 * self.n_res_ch, self.n_state, self.n_pts), dtype=float)
             for i in range(self.n_res_ch):
                 real_signal[2 * i, :, :] = self.signal[i, :, :].real
                 real_signal[2 * i + 1, :, :] = self.signal[i, :, :].imag
+        else:
+            real_signal = self.signal
 
         labels = np.outer(np.arange(self.n_state, dtype=int),
                           np.ones(self.n_pts, dtype=int)).flatten()
+        
         data = real_signal.reshape(-1, self.n_state * self.n_pts).T
-
+        
+        # train LDA with real signal
         self.lda.fit(data, labels)
-        norm = np.max([*np.abs(self.lda.coef_).flatten(),
-                       *np.abs(self.lda.intercept_).flatten()])
 
-        if self.dtype == float:
-            self.means = self.lda.means_.T
-            self.variances = np.diag(self.lda.covariance_)
-
-        elif self.dtype == complex:
+        # means : shape (n_res_ch, n_state), variances: shape (n_res_ch,)
+        if self.is_complex:
             self.means = np.array([
                 [(self.lda.means_[j, 2 * k] + 1j * self.lda.means_[j, 2 * k + 1])
                   for j in range(self.n_state)] for k in range(self.n_res_ch)])
             self.variances = np.mean(
                 np.diag(self.lda.covariance_).reshape(-1, 2), axis=1)
-        
-        
+        else:
+            self.means = self.lda.means_.T
+            self.variances = np.diag(self.lda.covariance_)
+
+        # coefficients and intercept for projection
+        norm = np.max([*np.abs(self.lda.coef_).flatten(),
+                       *np.abs(self.lda.intercept_).flatten()])        
         self.coef = self.lda.coef_ / norm
-        if self.dtype == complex:
+        if self.is_complex:
             self.coef = (self.coef[:, 0:(2 * self.n_res_ch):2] +
                          1j * self.coef[:, 1:(2 * self.n_res_ch):2])
         self.intercept = self.lda.intercept_ / norm
 
+        # perform projection
         self.projected_signal = np.array([
             [self.project(self.signal[:, j, k]) for k in range(self.n_pts)]
             for j in range(self.n_state)])
         self.n_proj = len(self.intercept)
+
         if self.n_state == 2:
             self.prediction = 1 * (self.projected_signal > 0)[:, :, 0]
         else:
             self.prediction = np.argmax(self.projected_signal, axis=-1)
-        
+
         # confusion matrix: row idx - prepared label, col idx - predicted label
         self.confusion = confusion_matrix(labels,
                                           self.prediction.flatten(),
@@ -690,16 +694,19 @@ class SingleShotLDA:
         gs = fig.add_gridspec(2, 1)
         # subgridspec
         sgs0 = gs[0].subgridspec(1, self.n_res_ch)
-        sgs1 = gs[1].subgridspec(1, self.n_proj)
-
+        if self.n_proj == 1:
+            sgs1 = gs[1].subgridspec(1, 2)
+        else:
+            sgs1 = gs[1].subgridspec(1, self.n_proj)
         
         data_axes = [fig.add_subplot(sgs0[j]) for j in range(self.n_res_ch)]
-        proj_axes = [fig.add_subplot(sgs1[l]) for l in range(self.n_proj)]
+        proj_axes = [fig.add_subplot(sgs1[l])
+                     for l in range(2 if self.n_proj == 1 else self.n_proj)]
 
         state_markers = ['o', 'v', 's', 'p', '*', 'h', '8', 'D']
         data_ms = np.sqrt(10000 / self.n_pts)
 
-        if self.dtype == complex:
+        if self.is_complex: # plot distribution of points in 2d
             for j in range(self.n_res_ch):
                 for k in range(self.n_state):
                     data_axes[j].plot(self.signal[j, k, :].real,
@@ -723,13 +730,32 @@ class SingleShotLDA:
                 data_axes[j].tick_params(axis='both', labelsize='small')
                 data_axes[j].axis('equal')
                 data_axes[j].set_title('Signal %d' % j, fontsize='medium')
-        elif self.dtype == float:
-            # plot histogram
+        else: # plot histogram
+            for j in range(self.n_res_ch):
+                hists = []
+                s_edges = None
+                _hist_min_max = np.min(self.signal[j, :, :]), np.max(self.signal[j, :, :])
 
-            pass
+                for k in range(self.n_state):
+                    H, s_edges = np.histogram(self.signal[j, k, :], bins=50,
+                                              range=_hist_min_max, density=False)
+                    hists.append(H)
+                hist_range = (s_edges[1:] + s_edges[:-1]) / 2
+                width = hist_range[1] - hist_range[0]
+                for k in range(self.n_state):
+                    data_axes[j].bar(hist_range, hists[k], width=width,
+                                     color="C%d" % k, alpha=0.5,
+                                     label=r"$|%d\rangle$ Data" % k)
+                    data_axes[j].axvline(x=self.means[j, k], color='C%d' % k,
+                                         ls=':')
 
-        n_proj = self.projected_signal.shape[-1]
-        for l in range(n_proj):
+                data_axes[j].set_xlabel(f'$I_{j}$')
+                data_axes[j].set_yscale("log")
+                data_axes[j].set_title(f'Signal %d' % j, fontsize='medium')
+                if j == 0:
+                    data_axes[j].set_ylabel('Counts')
+
+        for l in range(self.n_proj):
             p_sig = self.projected_signal[:, :, l]
             _hist_min_max = np.min(p_sig), np.max(p_sig)
 
@@ -748,27 +774,38 @@ class SingleShotLDA:
             proj_axes[l].set_xlabel(r'$X_{%d}$' % l)
             if l == 0:
                 proj_axes[l].set_ylabel('Counts')
+                if self.n_proj == 1:
+                    proj_axes[l].axvline(x=0, color='black')
             proj_axes[l].set_yscale("log")
             proj_axes[l].set_ylim([1e0, np.max(np.array(hists))])
             proj_axes[l].set_title('Projected Signal %d' % l, fontsize='medium')
-        plt.figure()
+
+        if self.n_proj == 1:
+            conf_mat_ax = proj_axes[1]
+        else:            
+            plt.figure()
+            conf_mat_ax = plt.gca()
+
         conf_matrix = np.copy(self.confusion)
-        size = conf_matrix.shape[0]
-        diag_idx = [n + n * size for n in range(size)]
-        vals = np.delete(conf_matrix.flatten(), diag_idx)
+        # size = conf_matrix.shape[0]
+        # diag_idx = [n + n * size for n in range(size)]
+        # vals = np.delete(conf_matrix.flatten(), diag_idx)
         
-        vmin_offdiag, vmax_offdiag = np.min(vals), np.max(vals)
-        ax0 = sns.heatmap(conf_matrix, cmap='Reds', annot=True,
-                          vmin=vmin_offdiag, vmax=vmax_offdiag)
-        cbar0 = ax0.collections[0].colorbar
-        cbar0.ax.tick_params(labelsize='small')
+        # vmin_offdiag, vmax_offdiag = np.min(vals), np.max(vals)
+        # ax0 = sns.heatmap(conf_matrix, cmap='Reds', annot=True, ax=conf_mat_ax,
+        #                   vmin=vmin_offdiag, vmax=vmax_offdiag)
+        # cbar0 = ax0.collections[0].colorbar
+        # cbar0.ax.tick_params(labelsize='small')
         
-        # fill in diagonal part of confusion matrix with a different colormap
-        diag_nan = np.full_like(conf_matrix, np.nan, dtype=float)
-        np.fill_diagonal(diag_nan, np.diag(conf_matrix))
+        # # fill in diagonal part of confusion matrix with a different colormap
+        # diag_nan = np.full_like(conf_matrix, np.nan, dtype=float)
+        # np.fill_diagonal(diag_nan, np.diag(conf_matrix))
         
-        ax = sns.heatmap(diag_nan, cmap='Blues', annot=True, vmin=0, vmax=1)
-        cbar = ax.collections[1].colorbar
+        # ax = sns.heatmap(diag_nan, cmap='Blues', annot=True, vmin=0, vmax=1,
+        #                  ax=conf_mat_ax)
+        ax = sns.heatmap(conf_matrix, cmap='Blues', annot=True, vmin=0, vmax=1,
+                         ax=conf_mat_ax)
+        cbar = ax.collections[0].colorbar
         cbar.ax.tick_params(labelsize='small')
         plt.xticks(fontsize='small')
         plt.yticks(fontsize='small')
@@ -780,8 +817,6 @@ class SingleShotLDA:
 
         ax.xaxis.set_ticklabels(labels)
         ax.yaxis.set_ticklabels(labels)
-        
-        plt.tight_layout()
 
 # class SingleShotLDATwoStates(SingleShotLDA):
 #     # with special plotting and Gaussian fitting
