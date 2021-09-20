@@ -617,7 +617,7 @@ class SingleShotLDA:
                 for k in range(self.n_state)])
             self.p_outlier[j, :] = np.mean(np.all(outliers, axis=0),
                                            axis=-1)
-    
+
     def _analyze_lda(self):
         if self.is_complex:
             real_signal = np.zeros(
@@ -648,13 +648,13 @@ class SingleShotLDA:
             self.variances = np.diag(self.lda.covariance_)
 
         # coefficients and intercept for projection
-        norm = np.max([*np.abs(self.lda.coef_).flatten(),
-                       *np.abs(self.lda.intercept_).flatten()])        
-        self.coef = self.lda.coef_ / norm
+        norm_ = np.max([*np.abs(self.lda.coef_).flatten(),
+                        *np.abs(self.lda.intercept_).flatten()])        
+        self.coef = self.lda.coef_ / norm_
         if self.is_complex:
             self.coef = (self.coef[:, 0:(2 * self.n_res_ch):2] +
                          1j * self.coef[:, 1:(2 * self.n_res_ch):2])
-        self.intercept = self.lda.intercept_ / norm
+        self.intercept = self.lda.intercept_ / norm_
 
         # perform projection
         self.projected_signal = np.array([
@@ -751,7 +751,7 @@ class SingleShotLDA:
 
                 data_axes[j].set_xlabel(f'$I_{j}$')
                 data_axes[j].set_yscale("log")
-                data_axes[j].set_title(f'Signal %d' % j, fontsize='medium')
+                data_axes[j].set_title('Signal %d' % j, fontsize='medium')
                 if j == 0:
                     data_axes[j].set_ylabel('Counts')
 
@@ -804,7 +804,7 @@ class SingleShotLDA:
         # ax = sns.heatmap(diag_nan, cmap='Blues', annot=True, vmin=0, vmax=1,
         #                  ax=conf_mat_ax)
         ax = sns.heatmap(conf_matrix, cmap='Blues', annot=True, vmin=0, vmax=1,
-                         ax=conf_mat_ax)
+                         fmt='g', ax=conf_mat_ax)
         cbar = ax.collections[0].colorbar
         cbar.ax.tick_params(labelsize='small')
         plt.xticks(fontsize='small')
@@ -906,10 +906,10 @@ class ReadoutTrace:
 
     def _find_weight_and_bias(self):
         traces = self.downsampled_avg_traces
-        norm = np.max(np.abs(traces))
-        self.weights = traces / norm
+        norm_ = np.max(np.abs(traces))
+        self.weights = traces / norm_
         self.bias = (np.linalg.norm(self.weights, axis=1, ord=2) ** 2 / 2 *
-                     norm * self.downsample_factor * self.demod_factor)
+                     norm_ * self.downsample_factor * self.demod_factor)
 
         if self.num_of_states == 2:
             self.optimal_integration_weight = self.weights[1, :] - self.weights[0, :]
