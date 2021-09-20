@@ -670,7 +670,7 @@ class SingleShotLDA:
         # confusion matrix: row idx - prepared label, col idx - predicted label
         self.confusion = confusion_matrix(labels,
                                           self.prediction.flatten(),
-                                          normalize='pred')
+                                          normalize='true')
         self.fidelity = np.mean(np.diag(self.confusion))
 
     def analyze(self, plot: bool=True, outlier_n_sigma: float=3.0):
