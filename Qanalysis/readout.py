@@ -586,12 +586,6 @@ class SingleShotLDA:
             raise ValueError('The `signal` must be 2 or 3-dimensional.')
 
         self.is_analyzed = False
-        self.means = None
-        self.variances = None
-
-        self.state_prediction = None
-        self.confusion = None
-        self.fidelity = None
 
         self.lda = LinearDiscriminantAnalysis(tol=1e-15,
                                               store_covariance=True)
@@ -663,13 +657,13 @@ class SingleShotLDA:
         self.n_proj = len(self.intercept)
 
         if self.n_state == 2:
-            self.prediction = 1 * (self.projected_signal > 0)[:, :, 0]
+            self.state_prediction = 1 * (self.projected_signal > 0)[:, :, 0]
         else:
-            self.prediction = np.argmax(self.projected_signal, axis=-1)
+            self.state_prediction = np.argmax(self.projected_signal, axis=-1)
 
         # confusion matrix: row idx - prepared label, col idx - predicted label
         self.confusion = confusion_matrix(labels,
-                                          self.prediction.flatten(),
+                                          self.state_prediction.flatten(),
                                           normalize='true')
         self.fidelity = np.mean(np.diag(self.confusion))
 
@@ -819,7 +813,7 @@ class SingleShotLDA:
         ax.yaxis.set_ticklabels(labels)
 
 # class SingleShotLDATwoStates(SingleShotLDA):
-#     # with special plotting and Gaussian fitting
+    # with special plotting and Gaussian fitting
     
 
 class ReadoutTrace:
@@ -932,9 +926,9 @@ class ReadoutTrace:
             # choose eigenvector with largest eigenvalue
             sortperm = np.argsort(np.abs(eigval))
             v = eigv[:, sortperm[-1]]
-            norm = np.max(np.abs(v))
+            norm_ = np.max(np.abs(v))
 
-            self.optimal_integration_weight = v / norm
+            self.optimal_integration_weight = v / norm_
             # IQ-point corresponding to readout signal of each state
             # demodulated with the optimal integration weight
             self.expected_demodulated_points = \
