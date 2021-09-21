@@ -592,7 +592,7 @@ class SingleShotLDA:
 
     def project(self, signal):
         return np.real(np.dot(np.conj(self.coef), signal)) + self.intercept
-    
+
     def predict(self, signal):
         if self.n_state == 2:
             return 1 * (self.project(signal) > 0)
@@ -600,7 +600,6 @@ class SingleShotLDA:
             return np.argmax(self.project(signal), axis=0)
 
     def _analyze_outliers(self):
-        
         self.p_outlier = np.zeros((self.n_res_ch,
                                    self.n_state), dtype=float)
 
