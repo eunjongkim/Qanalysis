@@ -1662,7 +1662,9 @@ class VacuumRabiChevron(TimeDomain):
 
         plt.tick_params(axis='x', which='both', labelbottom=False)
         plt.yticks(fontsize='x-small')
-        plt.ylabel('Amp', fontsize='small')
+        plt.ylabel('Amp' +
+                   (' (' + self.amp_prefix + ')' if len(self.amp_prefix) > 0 else ''),
+                   fontsize='small')
 
         plt.twinx()
         plt.ylabel('Fit', fontsize='medium')
