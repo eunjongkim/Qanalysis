@@ -1,8 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, least_squares
 from scipy.signal import windows
+from typing import Optional
 from .helper_functions import number_with_si_prefix, si_prefix_to_scaler
+from scipy.linalg import svd
+
 
 def _get_envelope(s, t, f):
     """
@@ -1381,3 +1384,299 @@ class MeasInducedDephasing:
         fit_axes[1].set_xlabel(r"Relative RO amp. $\xi$")
         fit_axes[1].set_ylabel(r"Ramsey envelope $c(\xi)$")
 
+from qutip import destroy, qeye, tensor, basis, Options, mesolve
+
+class VacuumRabiChevron(TimeDomain):
+    def __init__(self, time, amp, signal, amp_polyorder: Optional[int]=1,
+                 excited_qubit: Optional[str]='q1',
+                 tuned_qubit: Optional[str]='q1',
+                 measured_qubit: Optional[str]='q1'):
+        self.signal = signal
+        self.time = time
+        self.amp = amp
+        self.amp_polyorder = amp_polyorder
+        
+        if excited_qubit not in ['q1', 'q2']:
+            raise ValueError(
+                'The specified keyword argument `excited_qubit=%s`' % str(excited_qubit) +
+                ' is not supported. Use either "q1" or "q2" instead.')        
+        else:
+            self.excited_qubit = excited_qubit
+
+        if tuned_qubit not in ['q1', 'q2']:
+            raise ValueError(
+                'The specified keyword argument `tuned_qubit=%s`' % str(tuned_qubit) +
+                ' is not supported. Use either "q1" or "q2" instead.')        
+        else:
+            self.tuned_qubit = tuned_qubit
+
+        if measured_qubit not in ['q1', 'q2']:
+            raise ValueError(
+                'The specified keyword argument `measured_qubit=%s`' % str(measured_qubit) +
+                ' is not supported. Use either "q1" or "q2" instead.')        
+        else:
+            self.measured_qubit = measured_qubit
+
+        # qutip operators
+        sm = destroy(2)
+        sp = sm.dag()
+        sz = 2 * sp * sm - qeye(2)
+
+        self.qutip_ops = {
+            'sm1': tensor(sm, qeye(2)), 'sp1': tensor(sp, qeye(2)),
+            'sz1': tensor(sz, qeye(2)), 'sm2': tensor(qeye(2), sm),
+            'sp2': tensor(qeye(2), sp), 'sz2': tensor(qeye(2), sz)
+            }
+
+    def fit_func(self, time, amp, params):
+        '''
+        
+
+        Parameters
+        ----------
+        time : TYPE
+            DESCRIPTION.
+        amp : TYPE
+            DESCRIPTION.
+        params : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        '''
+        # create an array to store the data
+        result_arr = np.zeros((len(amp), len(time)))
+
+        # unpack free params
+        g, Gamma1_q1, Gamma1_q2, Gamma_phi_q1, Gamma_phi_q2, r0, r1, amp0, *c = params
+    
+        dz = amp - amp0
+        Delta_list = np.sum([c[i] * dz ** (i + 1) for i in range(len(c))],
+                            axis=0)
+
+        # load qutip operators
+        sm1, sp1, sz1 = self.qutip_ops['sm1'], self.qutip_ops['sp1'], self.qutip_ops['sz1']
+        sm2, sp2, sz2 = self.qutip_ops['sm2'], self.qutip_ops['sp2'], self.qutip_ops['sz2']
+
+        # interaction Hamiltonian
+        Hint = g * (sm1 * sp2 + sp1 * sm2)
+        # collapse operators (decay, pure dephasing)
+        c_ops = [np.sqrt(Gamma1_q1) * sm1, np.sqrt(Gamma1_q2) * sm2,
+                 np.sqrt(Gamma_phi_q1) * sz1, np.sqrt(Gamma_phi_q2) * sz2]
+
+        if self.measured_qubit == 'q1':
+            e_ops = [sp1 * sm1]
+        elif self.measured_qubit == 'q2':
+            e_ops = [sp2 * sm2]
+
+        if self.excited_qubit == 'q1':
+            psi0 = tensor(basis(2, 1), basis(2, 0))
+        elif self.excited_qubit == 'q2':
+            psi0 = tensor(basis(2, 0), basis(2, 1))
+
+        options = Options(nsteps=10000)
+
+        # time evolution with various detunings
+        if self.tuned_qubit == 'q1':
+            for idx, Delta in enumerate(Delta_list):
+                H = Delta * sp1 * sm1 + Hint
+
+                result = mesolve(H, psi0, time, c_ops=c_ops, e_ops=e_ops,
+                                 options=options)
+        
+                result_arr[idx, :] = result.expect[0]
+        elif self.tuned_qubit == 'q2':
+            for idx, Delta in enumerate(Delta_list):
+                H = Delta * sp2 * sm2 + Hint
+
+                result = mesolve(H, psi0, time, c_ops=c_ops, e_ops=e_ops,
+                                 options=options)
+        
+                result_arr[idx, :] = result.expect[0]
+
+        return r0 + r1 * result_arr
+
+    def _guess_init_params(self):
+        
+        sig_var = np.var(self.signal, axis=1)
+        i0 = np.argmax(sig_var)
+        amp0, sig0 = self.amp[i0], self.signal[i0]
+        sig0_rfft = np.fft.rfft(sig0 - np.mean(sig0))
+        sig0_rfftfreq = np.fft.rfftfreq(len(sig0), d=self.time[1]-self.time[0])
+        
+        # initial guess of the oscillation frequency
+        f0 = sig0_rfftfreq[np.argmax(sig0_rfft)]
+        
+        # fit sig0 with damped oscillation curve
+        def damped_osc(time, a, b, gamma, f):
+            return a * np.cos(2 * np.pi * f * time) * np.exp(-gamma * time) + b
+        a0 = np.max(sig0) - np.mean(sig0)
+        popt, pcov = curve_fit(damped_osc, self.time, sig0,
+                               p0=[a0, np.mean(sig0), 0.0, f0])
+        f0 = popt[3]
+        if popt[2] > 0.0:
+            gamma0 = popt[2]
+        else:
+            gamma0 = 1 / (self.time[-1] - self.time[0])
+        
+        # convert oscillation freq to g
+        g0 = 2 * np.pi * f0 / 2
+
+        min_, max_ = np.min(self.signal), np.max(self.signal)
+        if self.excited_qubit == self.measured_qubit:
+            # starting from excited state
+            if (sig0[0] - min_) > (max_ - sig0[0]):
+                r1 = max_ - min_
+                r0 = min_
+            else:
+                r1 = min_ - max_
+                r0 = max_
+        else:
+            # starting from ground state
+            if (sig0[0] - min_) > (max_ - sig0[0]):
+                r1 = min_ - max_
+                r0 = max_
+            else:
+                r1 = max_ - min_
+                r0 = min_
+        
+        
+        sig_var_mid = 0.5 * (np.max(sig_var) + np.min(sig_var))
+        i1 = np.argmin(np.abs(sig_var[i0:] - sig_var_mid)) + i0
+        i2 = np.argmin(np.abs(sig_var[:i0] - sig_var_mid))
+        c1 = 2 * g0 / (self.amp[i1] - self.amp[i2])
+        
+        self.p0 = [g0, gamma0, gamma0, gamma0, gamma0] + [r0, r1, amp0, c1]
+        self.p0 = self.p0 + [0.0] * (self.amp_polyorder - 1)
+
+    def analyze(self, p0=None, plot=True):
+
+        self._set_init_params(p0)
+
+        def lsq_func(params):        
+            result_arr = self.fit_func(self.time, self.amp, params)
+            
+            return (result_arr - self.signal).flatten()
+
+        res = least_squares(
+            lsq_func, self.p0,
+            bounds=([0.0, 0.0, 0.0, 0.0, 0.0, -np.inf, -np.inf, -np.inf] +
+                    [-np.inf] * self.amp_polyorder, np.inf),
+            ftol=1e-12, xtol=1e-12)
+
+        self.popt = res.x
+
+        self._get_pcov(res)
+        self.perr = np.sqrt(np.diag(self.pcov))
+
+        self.g = self.popt[0]
+        self.g_sigma_err = self.perr[0]
+
+        self.Gamma1_q1 = self.popt[1]
+        self.Gamma1_q1_sigma_err = self.perr[1]
+        self.Gamma1_q2 = self.popt[2]
+        self.Gamma1_q2_sigma_err = self.perr[2]
+
+        self.Gamma_phi_q1 = self.popt[3]
+        self.Gamma_phi_q1_sigma_err = self.perr[3]
+        self.Gamma_phi_q2 = self.popt[4]
+        self.Gamma_phi_q2_sigma_err = self.perr[4]
+
+        self.amp0 = self.popt[7]
+        self.amp0_sigma_err = self.perr[7]
+        
+        dz = self.amp - self.amp0
+        c = self.popt[8:]
+        self.detuning = np.sum([c[i] * dz ** (i + 1) for i in range(len(c))],
+                               axis=0) / (2 * np.pi)
+
+        if plot:
+            self.plot_result()
+
+    def _get_pcov(self, res): 
+        # Do Moore-Penrose inverse discarding zero singular values.
+        _, s, VT = svd(res.jac, full_matrices=False)
+        threshold = np.finfo(float).eps * max(res.jac.shape) * s[0]
+        s = s[s > threshold]
+        VT = VT[:s.size]
+        self.pcov = np.dot(VT.T / s**2, VT)
+    
+    def plot_result(self):
+        # rescale data axes
+        _, self.time_prefix = number_with_si_prefix(np.max(np.abs(self.time)))
+        self.time_scaler = si_prefix_to_scaler(self.time_prefix)
+
+        _, self.amp_prefix = number_with_si_prefix(np.max(np.abs(self.amp)))
+        self.amp_scaler = si_prefix_to_scaler(self.amp_prefix)
+
+        fig = plt.figure()
+        # plot data
+        plt.subplot(3, 1, 1)
+        plt.pcolor(self.time / self.time_scaler,
+                   self.amp / self.amp_scaler, self.signal, shading='auto',
+                   cmap=plt.cm.RdBu_r)
+        plt.ylabel('Amp' +
+                   (' (' + self.amp_prefix + ')' if len(self.amp_prefix) > 0 else ''),
+                   fontsize='small')
+        plt.xlim(np.min(self.time) / self.time_scaler, np.max(self.time) / self.time_scaler)
+        plt.tick_params(axis='x', which='both', labelbottom=False)
+        plt.yticks(fontsize='x-small')
+        plt.twinx()
+        plt.ylabel('Data', fontsize='medium')
+        plt.tick_params(axis='y', which='both', right=False, labelright=False)
+
+        # plot fit      
+        plt.subplot(3, 1, 2)
+
+        fit_time = np.linspace(np.min(self.time), np.max(self.time), 1000)
+        fit_amp = np.linspace(np.min(self.amp), np.max(self.amp), 1000)
+        
+        plt.pcolor(fit_time / self.time_scaler,
+                   fit_amp / self.amp_scaler,
+                   self.fit_func(fit_time, fit_amp, self.popt),
+                   shading='auto', cmap=plt.cm.RdBu_r)
+
+        plt.axhline(y=self.amp0 / self.amp_scaler, ls='--', color='black')
+        plt.xlim(np.min(self.time) / self.time_scaler, np.max(self.time) / self.time_scaler)
+        
+        _, g_2pi_prefix = number_with_si_prefix(np.max(np.abs(self.g / (2 * np.pi))))
+        g_2pi_scaler = si_prefix_to_scaler(g_2pi_prefix)
+
+        plt.tick_params(axis='x', which='both', labelbottom=False)
+        plt.yticks(fontsize='x-small')
+        plt.ylabel('Amp', fontsize='small')
+
+        plt.twinx()
+        plt.ylabel('Fit', fontsize='medium')
+        plt.tick_params(axis='y', which='both', right=False, labelright=False)
+
+        plt.subplot(3, 1, 3)
+        
+        fit_data = self.fit_func(fit_time, self.amp, self.popt)
+
+        for i in range(len(self.amp)):
+            plt.plot(self.time / self.time_scaler, self.signal[i, :], '.', color=f'C{i}')
+            plt.plot(fit_time / self.time_scaler, fit_data[i, :], '-', color=f'C{i}')
+        plt.xlabel('Time (' + self.time_prefix + 's)', fontsize='small')
+        plt.ylabel('Signal', fontsize='small')
+        plt.xticks(fontsize='x-small')
+        plt.yticks(fontsize='x-small')
+        plt.xlim(np.min(self.time) / self.time_scaler, np.max(self.time) / self.time_scaler)
+
+        _fit_result_msg = [
+            (r'$g/2\pi=%.3f\pm %.3f$' % (self.g / (2 * np.pi * g_2pi_scaler),
+                                         self.g_sigma_err / (2 * np.pi * g_2pi_scaler))) +
+            ' ' + g_2pi_prefix + 'Hz',
+            ('Amp0$=%.3f\pm %.3f$' % (self.amp0 / self.amp_scaler,
+                                      self.amp0_sigma_err / self.amp_scaler)) +
+            ((' ' + self.amp_prefix) if len(self.amp_prefix) > 0 else '')
+            ]
+        plt.suptitle('Vacuum Rabi Osc.: ' +
+                     ', '.join(_fit_result_msg), fontsize='medium')
+        
+        plt.tight_layout()
+    # def fit_func(self):
+        
