@@ -1478,24 +1478,30 @@ class VacuumRabiChevron(TimeDomain):
             psi0 = tensor(basis(2, 0), basis(2, 1))
 
         options = Options(nsteps=10000)
-
+        
+        # to take into account the interaction before initial time
+        t0, t1 = time[0], time[-1]
+        dt = time[1] - time[0]
+        initial_time = np.arange(0.0, t0, dt)
+        
+        extended_time = np.append(initial_time, time)
         # time evolution with various detunings
         if self.tuned_qubit == 'q1':
             for idx, Delta in enumerate(Delta_list):
                 H = Delta * sp1 * sm1 + Hint
 
-                result = mesolve(H, psi0, time, c_ops=c_ops, e_ops=e_ops,
+                result = mesolve(H, psi0, extended_time, c_ops=c_ops, e_ops=e_ops,
                                  options=options)
         
-                result_arr[idx, :] = result.expect[0]
+                result_arr[idx, :] = result.expect[0][len(initial_time):]
         elif self.tuned_qubit == 'q2':
             for idx, Delta in enumerate(Delta_list):
                 H = Delta * sp2 * sm2 + Hint
 
-                result = mesolve(H, psi0, time, c_ops=c_ops, e_ops=e_ops,
+                result = mesolve(H, psi0, extended_time, c_ops=c_ops, e_ops=e_ops,
                                  options=options)
         
-                result_arr[idx, :] = result.expect[0]
+                result_arr[idx, :] = result.expect[0][len(initial_time):]
 
         return r0 + r1 * result_arr
 
@@ -1508,19 +1514,28 @@ class VacuumRabiChevron(TimeDomain):
         sig0_rfftfreq = np.fft.rfftfreq(len(sig0), d=self.time[1]-self.time[0])
         
         # initial guess of the oscillation frequency
-        f0 = sig0_rfftfreq[np.argmax(sig0_rfft)]
-        
+        f0 = sig0_rfftfreq[np.argmax(np.abs(sig0_rfft))]
         # fit sig0 with damped oscillation curve
-        def damped_osc(time, a, b, gamma, f):
-            return a * np.cos(2 * np.pi * f * time) * np.exp(-gamma * time) + b
-        a0 = np.max(sig0) - np.mean(sig0)
-        popt, pcov = curve_fit(damped_osc, self.time, sig0,
-                               p0=[a0, np.mean(sig0), 0.0, f0])
-        f0 = popt[3]
-        if popt[2] > 0.0:
-            gamma0 = popt[2]
+        def damped_osc(time, a, b, t0, gamma, f):
+            return a * np.cos(2 * np.pi * f * (time - t0)) * np.exp(-gamma * time) + b
+        
+        if (np.max(sig0) - sig0[0]) < (sig0[0] - np.min(sig0)):
+            a0 = 0.5 * (np.max(sig0) - np.min(sig0))
         else:
+            a0 = - 0.5 * (np.max(sig0) - np.min(sig0))
+
+        popt, pcov = curve_fit(damped_osc, self.time, sig0,
+                               p0=[a0, np.mean(sig0), 0.0, 0.0, f0])
+
+        # check the fit quality
+        if np.abs(popt[0]) < 0.1 * (np.max(sig0) - np.min(sig0)):
             gamma0 = 1 / (self.time[-1] - self.time[0])
+        else:
+            f0 = popt[-1]
+            if popt[-2] > 0.0:
+                gamma0 = popt[-2]
+            else:
+                gamma0 = 1 / (self.time[-1] - self.time[0])
         
         # convert oscillation freq to g
         g0 = 2 * np.pi * f0 / 2
@@ -1542,13 +1557,12 @@ class VacuumRabiChevron(TimeDomain):
             else:
                 r1 = max_ - min_
                 r0 = min_
-        
-        
+
         sig_var_mid = 0.5 * (np.max(sig_var) + np.min(sig_var))
         i1 = np.argmin(np.abs(sig_var[i0:] - sig_var_mid)) + i0
         i2 = np.argmin(np.abs(sig_var[:i0] - sig_var_mid))
         c1 = 2 * g0 / (self.amp[i1] - self.amp[i2])
-        
+
         self.p0 = [g0, gamma0, gamma0, gamma0, gamma0] + [r0, r1, amp0, c1]
         self.p0 = self.p0 + [0.0] * (self.amp_polyorder - 1)
 
@@ -1618,6 +1632,7 @@ class VacuumRabiChevron(TimeDomain):
         plt.pcolor(self.time / self.time_scaler,
                    self.amp / self.amp_scaler, self.signal, shading='auto',
                    cmap=plt.cm.RdBu_r)
+        plt.axhline(y=self.amp0 / self.amp_scaler, ls='--', color='black')
         plt.ylabel('Amp' +
                    (' (' + self.amp_prefix + ')' if len(self.amp_prefix) > 0 else ''),
                    fontsize='small')
@@ -1631,8 +1646,8 @@ class VacuumRabiChevron(TimeDomain):
         # plot fit      
         plt.subplot(3, 1, 2)
 
-        fit_time = np.linspace(np.min(self.time), np.max(self.time), 1000)
-        fit_amp = np.linspace(np.min(self.amp), np.max(self.amp), 1000)
+        fit_time = np.linspace(np.min(self.time), np.max(self.time), 100)
+        fit_amp = np.linspace(np.min(self.amp), np.max(self.amp), 100)
         
         plt.pcolor(fit_time / self.time_scaler,
                    fit_amp / self.amp_scaler,
@@ -1660,7 +1675,7 @@ class VacuumRabiChevron(TimeDomain):
         for i in range(len(self.amp)):
             plt.plot(self.time / self.time_scaler, self.signal[i, :], '.', color=f'C{i}')
             plt.plot(fit_time / self.time_scaler, fit_data[i, :], '-', color=f'C{i}')
-        plt.xlabel('Time (' + self.time_prefix + 's)', fontsize='small')
+        plt.xlabel('Interaction Time (' + self.time_prefix + 's)', fontsize='small')
         plt.ylabel('Signal', fontsize='small')
         plt.xticks(fontsize='x-small')
         plt.yticks(fontsize='x-small')
