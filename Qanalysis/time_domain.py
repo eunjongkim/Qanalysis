@@ -1566,7 +1566,7 @@ class VacuumRabiChevron(TimeDomain):
         self.p0 = [g0, gamma0, gamma0, gamma0, gamma0] + [r0, r1, amp0, c1]
         self.p0 = self.p0 + [0.0] * (self.amp_polyorder - 1)
 
-    def analyze(self, p0=None, plot=True):
+    def analyze(self, p0=None, plot=True, **kwargs):
 
         self._set_init_params(p0)
 
@@ -1578,8 +1578,8 @@ class VacuumRabiChevron(TimeDomain):
         res = least_squares(
             lsq_func, self.p0,
             bounds=([0.0, 0.0, 0.0, 0.0, 0.0, -np.inf, -np.inf, -np.inf] +
-                    [-np.inf] * self.amp_polyorder, np.inf),
-            ftol=1e-12, xtol=1e-12)
+                    [-np.inf] * self.amp_polyorder, np.inf), **kwargs)
+            # ftol=1e-12, xtol=1e-12)
 
         self.popt = res.x
 
