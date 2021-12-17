@@ -5,6 +5,7 @@ from scipy.signal import windows
 from typing import Optional
 from .helper_functions import number_with_si_prefix, si_prefix_to_scaler
 from scipy.linalg import svd
+import cma
 
 
 def _get_envelope(s, t, f):
@@ -1244,8 +1245,8 @@ class EasyReadout:
         self.n = (self.v_e - self.v_g) / np.abs(self.v_e - self.v_g)
 
         # projection of complex data to a line v_orig + x * n
-        self.population = (self._inner_product(self.data - self.v_g, self.n) /
-                           np.abs(self.v_e - self.v_g))
+        self.projected_data = self._inner_product(self.data - self.v_g, self.n)
+        self.population =  self.projected_data / np.abs(self.v_e - self.v_g)
 
     def _inner_product(self, z1, z2):
         """
@@ -1395,7 +1396,7 @@ class VacuumRabiChevron(TimeDomain):
         self.time = time
         self.amp = amp
         self.amp_polyorder = amp_polyorder
-        
+        self.amp_norm = np.max(amp) - np.min(amp)
         if excited_qubit not in ['q1', 'q2']:
             raise ValueError(
                 'The specified keyword argument `excited_qubit=%s`' % str(excited_qubit) +
@@ -1453,7 +1454,7 @@ class VacuumRabiChevron(TimeDomain):
         # unpack free params
         g, Gamma1_q1, Gamma1_q2, Gamma_phi_q1, Gamma_phi_q2, r0, r1, amp0, *c = params
     
-        dz = amp - amp0
+        dz = (amp - amp0) / self.amp_norm
         Delta_list = np.sum([c[i] * dz ** (i + 1) for i in range(len(c))],
                             axis=0)
 
@@ -1508,8 +1509,34 @@ class VacuumRabiChevron(TimeDomain):
     def _guess_init_params(self):
         
         sig_var = np.var(self.signal, axis=1)
-        i0 = np.argmax(sig_var)
+        if self.guess_FFT:
+            fft_pop = np.fft.rfft(self.signal, axis=-1)
+            fft_pop[:, 0] = 0 ## remove the dc part if any
+            fft_freq = np.fft.rfftfreq(len(self.signal[0, :]), d=(self.time[1] - self.time[0]))
+            n_amp, n_freq = fft_pop.shape
+            freq_max = []
+            rel_amp_array = []
+            max_fft = np.max(np.max(np.abs(fft_pop)))
+            max_freq_ind = n_freq
+                
+            for j in range(n_amp):
+                if np.max(np.abs(fft_pop[j, :])) > 0.15 * max_fft:
+                    ind_max_intensity = np.argmax(np.abs(fft_pop[j, :]))
+                    freq_max.append(fft_freq[ind_max_intensity])
+                    rel_amp_array.append(self.amp[j])
+                    if ind_max_intensity <= max_freq_ind:
+                        if ind_max_intensity < max_freq_ind:
+                            i0_list = [j]
+                            max_freq_ind = ind_max_intensity
+                        else:
+                            i0_list.append(j)
+            i0 = int(np.floor(np.mean(i0_list)))
+
+            # i0 = np.argmin(np.argmax(np.abs(fft_pop), axis=-1))
+        else:
+            i0 = np.argmax(sig_var)
         amp0, sig0 = self.amp[i0], self.signal[i0]
+        print(amp0)
         sig0_rfft = np.fft.rfft(sig0 - np.mean(sig0))
         sig0_rfftfreq = np.fft.rfftfreq(len(sig0), d=self.time[1]-self.time[0])
         
@@ -1561,13 +1588,13 @@ class VacuumRabiChevron(TimeDomain):
         sig_var_mid = 0.5 * (np.max(sig_var) + np.min(sig_var))
         i1 = np.argmin(np.abs(sig_var[i0:] - sig_var_mid)) + i0
         i2 = np.argmin(np.abs(sig_var[:i0] - sig_var_mid))
-        c1 = 2 * g0 / (self.amp[i1] - self.amp[i2])
+        c1 = 2 * g0 / ((self.amp[i1] - self.amp[i2]) / self.amp_norm)
 
-        self.p0 = [g0, gamma0, gamma0, gamma0, gamma0] + [r0, r1, amp0, c1]
-        self.p0 = self.p0 + [0.0] * (self.amp_polyorder - 1)
+        self.p0 = ([g0, gamma0, gamma0, gamma0, gamma0] + [r0, r1, amp0, c1] +
+                   [0.0] * (self.amp_polyorder - 1))
 
-    def analyze(self, p0=None, plot=True, **kwargs):
-
+    def analyze(self, p0=None, plot=True, guess_FFT=False, **kwargs):
+        self.guess_FFT = guess_FFT
         self._set_init_params(p0)
 
         def lsq_func(params):        
@@ -1578,11 +1605,36 @@ class VacuumRabiChevron(TimeDomain):
         res = least_squares(
             lsq_func, self.p0,
             bounds=([0.0, 0.0, 0.0, 0.0, 0.0, -np.inf, -np.inf, -np.inf] +
-                    [-np.inf] * self.amp_polyorder, np.inf), **kwargs)
+                    [-np.inf] * 1, np.inf), **kwargs)
             # ftol=1e-12, xtol=1e-12)
 
         self.popt = res.x
+        
+        # if self.amp_polyorder > 1:
+        #     c1 = self.popt[-1]
+        #     amp0 = self.popt[7]
+        #     sig_var = np.var(self.signal, axis=1)
+        #     i0 = np.argmin(np.abs(self.amp - amp0))
 
+        #     sig_var_mid = 0.5 * (np.max(sig_var) + np.min(sig_var))
+        #     i1 = np.argmin(np.abs(sig_var[i0:] - sig_var_mid)) + i0
+        #     i2 = np.argmin(np.abs(sig_var[:i0] - sig_var_mid))
+
+        #     da_l = (amp0 - self.amp[i2]) / self.amp_norm
+        #     da_r = (self.amp[i1] - amp0) / self.amp_norm
+        #     c2 = - c1 * (da_l - da_r) / (da_l ** 2 + da_r ** 2) / 10
+        #     self.p0 = self.p0 + [c2]
+
+        #     # try:
+        #     res = least_squares(
+        #         lsq_func, self.p0,
+        #         bounds=([0.0, 0.0, 0.0, 0.0, 0.0, -np.inf, -np.inf, -np.inf] +
+        #                 [-np.inf] * self.amp_polyorder, np.inf), **kwargs)
+            
+        #     self.popt = res.x
+        #     # except:
+        #         # pass
+        
         self._get_pcov(res)
         self.perr = np.sqrt(np.diag(self.pcov))
 
@@ -1602,7 +1654,7 @@ class VacuumRabiChevron(TimeDomain):
         self.amp0 = self.popt[7]
         self.amp0_sigma_err = self.perr[7]
         
-        dz = self.amp - self.amp0
+        dz = (self.amp - self.amp0) / self.amp_norm
         c = self.popt[8:]
         self.detuning = np.sum([c[i] * dz ** (i + 1) for i in range(len(c))],
                                axis=0) / (2 * np.pi)
@@ -1631,7 +1683,7 @@ class VacuumRabiChevron(TimeDomain):
         plt.subplot(3, 1, 1)
         plt.pcolor(self.time / self.time_scaler,
                    self.amp / self.amp_scaler, self.signal, shading='auto',
-                   cmap=plt.cm.RdBu_r)
+                   cmap=plt.cm.hot)
         plt.axhline(y=self.amp0 / self.amp_scaler, ls='--', color='black')
         plt.ylabel('Amp' +
                    (' (' + self.amp_prefix + ')' if len(self.amp_prefix) > 0 else ''),
@@ -1652,7 +1704,7 @@ class VacuumRabiChevron(TimeDomain):
         plt.pcolor(fit_time / self.time_scaler,
                    fit_amp / self.amp_scaler,
                    self.fit_func(fit_time, fit_amp, self.popt),
-                   shading='auto', cmap=plt.cm.RdBu_r)
+                   shading='auto', cmap=plt.cm.hot)
 
         plt.axhline(y=self.amp0 / self.amp_scaler, ls='--', color='black')
         plt.xlim(np.min(self.time) / self.time_scaler, np.max(self.time) / self.time_scaler)
@@ -1696,4 +1748,136 @@ class VacuumRabiChevron(TimeDomain):
         
         plt.tight_layout()
     # def fit_func(self):
+
+class QuantumWalk_1P(TimeDomain):
+    def __init__(self, time, pop):
+        # initialize parameters
+        self.time = time
+        self.pop = pop
+        self.N_emit = len(pop)
+        self.is_analyzed = False
+        self.p0 = None
+        self.popt = None
+        self.pcov = None
+        self.lb = None
+        self.ub = None
+
+    def fit_func(self):
+        """
+        Fit function to be called during curve_fit. Will be overwritten in subclass
+        """
+        pass
+
+    def _guess_init_params(self):
+        """
+        Guess initial parameters from data. Will be overwritten in subclass
+        """
+        pass
+
+    def _set_init_params(self, p0):
+        pass
+    
+    def _save_fit_results(self, popt, pcov):
+        pass
+
+    def analyze(self, tij_mat, p0=None, plot=True, plot_cma=False,
+                omega_max=(5e6 * 2 * np.pi), sigma=0.7, tolx=0.001):
+        """
+        Analyze the data with initial parameter `p0`.
+        """
+        def qw_1Psolver_ED_10ini(t_list, omega_list, tij_mat, N_emit):
+            """
+            Schrodinger equation solver for quantum walk with a single particle
+            N_emit number of emitters.
+            """
+            H_sub = np.zeros((N_emit, N_emit))
+            for j in range(N_emit):
+                H_sub[j,j] = omega_list[j]
+                for k in range(N_emit):
+                    if j != k:
+                        H_sub[j,k] = tij_mat[j, k]
+            
+            v, w = np.linalg.eigh(H_sub)
+            pop_list = []
+            for jini in range(N_emit):
+                psi0_sub = np.zeros((N_emit, 1))
+                psi0_sub[jini, :] = 1
+                coef = np.matmul(np.transpose(psi0_sub), w)
+                tevolve_mat = np.exp(-1j * np.matmul(np.transpose([v]), [t_list]))
+                coef_tevolve = np.matmul(np.diag(coef[0]), tevolve_mat)
+                evolve_result = np.matmul(w, coef_tevolve)
+                pop_list.append((np.abs(evolve_result)) ** 2)
+            return pop_list
+        
+        def cost_fun(times, tij_mat, N_emit, omega_max, pop):
+            def simulation_cost(rel_omega_list):
+                omega_list = rel_omega_list * omega_max
+                result_list = qw_1Psolver_ED_10ini(times, omega_list, tij_mat, N_emit)
+                sqr_cost = 0
+                for je in range(N_emit):
+                    sqr_cost += np.sum((pop[je] - result_list[je])**2)
+                # print(f'cost: {sqr_cost}')
+                return sqr_cost
+            return simulation_cost
+        
+        if p0 is None:
+            p0 = ([0] * self.N_emit)
+        self.es = cma.CMAEvolutionStrategy(p0, sigma, {'bounds': [-1, 1], 'tolx': tolx})
+        self.es.optimize(cost_fun(self.time, tij_mat, self.N_emit, omega_max, self.pop))
+        if plot_cma:
+            cma.plot()
+        
+        self.omega_fit = self.es.result_pretty().xbest * omega_max
+        self.result_list = qw_1Psolver_ED_10ini(self.time, self.omega_fit, tij_mat, self.N_emit)
+        self.is_analyzed = True
+        
+        if plot:
+            self.plot_result()
+
+    def _plot_base(self):
+        pass
+
+    def plot_result(self):
+        """
+        Will be overwritten in subclass
+        """
+        if not self.is_analyzed:
+            raise ValueError("The data must be analyzed before plotting")
+        else:
+            q_cent = int((self.N_emit - 1) / 2)
+            site = np.array(range(int((self.N_emit - 1) / 2))) + q_cent
+            fig, ax = plt.subplots(4, int(self.N_emit / 2), figsize=(20, 7))
+            je = 0
+            for jx in range(2):
+                for jy in range(int(self.N_emit / 2)):
+                    c = ax[jx, jy].pcolor(self.time * 1e9, np.arange(self.N_emit + 1) + 0.5,  
+                                          self.pop[je], cmap = 'hot')
+                    ax[jx, jy].set_xlabel('time (ns)')
+                    ax[jx, jy].set_ylabel('Qubit')
+                    ax[jx, jy].set_aspect(80)
+                    fig.colorbar(c, ax = ax[jx, jy])
+                    je += 1
+            
+            je = 0
+            for jx in [2,3]:
+                for jy in range(int(self.N_emit / 2)):
+                    c = ax[jx, jy].pcolor(self.time * 1e9, np.arange(self.N_emit + 1) + 0.5,  
+                                          self.result_list[je], cmap = 'hot')
+                    ax[jx, jy].set_xlabel('time (ns)')
+                    ax[jx, jy].set_ylabel('Fitting Qubit')
+                    ax[jx, jy].set_aspect(80)
+                    fig.colorbar(c, ax = ax[jx, jy])
+                    je += 1
+            
+            fig.tight_layout()
+            plt.show()
+            
+            plt.figure()
+            plt.plot(range(1, 11, 1), (self.omega_fit - np.mean(self.omega_fit)) / (2 * np.pi * 1e6), 'o', label='cma'); 
+            plt.legend()
+            plt.xlabel('qubit');
+            plt.ylabel('detuning (MHz)')
+            plt.pause(0.1)
+            plt.draw()
+            
         
