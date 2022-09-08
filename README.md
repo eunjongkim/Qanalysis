@@ -6,7 +6,7 @@ The package consists of two modules, `frequency_domain` and `time_domain`, which
 ## Installation
 Move to the directory of `Qanalysis` (can be copied to local directory by `$git clone https://github.com/eunjongkim/Qanalysis`) and run:
 ```
-$python setup.py install
+$ pip install -e .
 ```
 
 ## Usage
