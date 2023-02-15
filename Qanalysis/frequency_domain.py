@@ -1,19 +1,21 @@
-# class FrequencyDomain:
-    
-# def simple_resonance_detector()
-
 from scipy.optimize import curve_fit, least_squares
+from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 import numpy as np
-from .helper_functions import *
+from Qanalysis.helper_functions import *
 
 
-def lorentzian_fit_func(f, f0, gamma, a, b):
-    omega, omega0 = 2 * np.pi * f, 2 * np.pi * f0
+def lorentzian_fit_func(
+    f: float, f0: float, gamma: float, a: float, b: float
+) -> float:
+
+    # angular frequency
+    omega = 2 * np.pi * f
+    omega0 = 2 * np.pi * f0
 
     return a + b / np.pi * (gamma / 2) / ((omega - omega0) ** 2 + (gamma / 2) ** 2)
 
-def analyze_lorentzian(f, sig, p0=None):
+def analyze_lorentzian(f: np.ndarray, sig: np.ndarray, p0: list[float] = None):
     sig_mag = sig
     if sig.dtype == complex:
         sig_mag = np.abs(sig) ** 2
@@ -38,12 +40,16 @@ def analyze_lorentzian(f, sig, p0=None):
         
             p0 = [f0, gamma, a, b]
 
-    fit = curve_fit(lorentzian_fit_func, f, sig_mag, p0=p0, 
-                    bounds=([p0[0] * 0.5, p0[1] * 0.5, 0, p0[3] * 0.1], 
-                            [p0[0] * 1.5, p0[1] * 1.5, np.inf, p0[3] * 10]))
+    fit = curve_fit(
+        lorentzian_fit_func, f, sig_mag, p0=p0, 
+        bounds=(
+            [p0[0] * 0.5, p0[1] * 0.5, 0, p0[3] * 0.1],
+            [p0[0] * 1.5, p0[1] * 1.5, np.inf, p0[3] * 10]
+        )
+    )
     return fit
 
-def gaussian_fit_func(f, f0, a, c, d):
+def gaussian_fit_func(f: float, f0: float, a: float, c: float, d: float):
     return a * np.exp(-(f - f0)**2 / (2 * c**2)) + d
 
 def analyze_gaussian(f, sig, p0=None):
@@ -75,9 +81,6 @@ def analyze_gaussian(f, sig, p0=None):
                         bounds=([p0[0] * 0.5, p0[1] * 0.5, p0[2] * 0.1, 0], 
                                 [p0[0] * 1.5, p0[1] * 1.5, p0[2] * 10, np.inf]))
     return fit
-    
-
-# class DispersiveShift:
 
     
 class FrequencyDomain:
@@ -104,6 +107,9 @@ class FrequencyDomain:
     def _save_fit_results(self, popt, pcov):
         self.popt = popt
         self.pcov = pcov
+        self.r2_score = r2_score(
+            self.signal, self.fit_func(self.frequency, *(self.popt))
+        )
 
     def analyze(self, p0=None, plot=True, **kwargs):
         """

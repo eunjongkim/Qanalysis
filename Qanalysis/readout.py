@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sat Nov 28 10:36:31 2020
-
-@author: paint
-"""
-
 from pandas import DataFrame
 from scipy.optimize import least_squares
 from scipy.stats import multivariate_normal
