@@ -1,23 +1,10 @@
-from abc import abstractmethod, ABC
-from typing import Any
+from abc import abstractmethod
+from Qanalysis.api.analysis import DataAnalysis
+from Qanalysis.api.helper_tools import UnitfulNumber
 from sklearn.metrics import r2_score
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
 import numpy as np
-from Qanalysis.helper_functions import UnitfulNumber
-
-class DataAnalysis(ABC):
-    """
-    Abstract class to implement 
-    """
-
-    @abstractmethod
-    def analyze(self, *args, **kwargs) -> None:
-        pass
-
-    @abstractmethod
-    def plot_result(self) -> None:
-        pass
+import matplotlib.pyplot as plt
 
 class CurveFitAnalysis(DataAnalysis):
     """
@@ -71,10 +58,10 @@ class CurveFitAnalysis1D(CurveFitAnalysis):
     Base class to implement curve fitting analysis for 1D data
     """
     def __init__(
-            self, x: np.ndarray, y: np.ndarray,
-            x_name: str = None, y_name: str = None,
-            x_unit: str = None, y_unit: str = None
-        ) -> None:
+        self, x: np.ndarray, y: np.ndarray,
+        x_name: str = None, y_name: str = None,
+        x_unit: str = None, y_unit: str = None
+    ) -> None:
         # initialize parameters
         self._x = {'value': x, 'name': x_name, 'unit': x_unit}
         self._y = {'value': y, 'name': y_name, 'unit': y_unit}
