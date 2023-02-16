@@ -86,7 +86,7 @@ def get_envelope(s: np.ndarray, t: np.ndarray, f: float):
 
 
 @dataclass(eq = True)
-class UnitfulNumber:
+class ScientificNumber:
     """
     Dataclass for representing a number (with errorbar) with a unit.
     """

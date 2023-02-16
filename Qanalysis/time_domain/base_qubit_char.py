@@ -1,4 +1,4 @@
-from Qanalysis.helper_functions import UnitfulNumber, get_envelope
+from Qanalysis.api.helper_tools import ScientificNumber, get_envelope
 from Qanalysis.time_domain.base_time_domain import AmpSweep, TimeSweep
 import matplotlib.pyplot as plt
 import numpy as np
@@ -56,10 +56,10 @@ class Rabi(TimeSweep):
     def plot_result(self, fit_n_pts: int = 1000) -> plt.Figure:
         fig = super().plot_result(fit_n_pts = fit_n_pts)
 
-        TRabi_unitful = UnitfulNumber(
+        TRabi_unitful = ScientificNumber(
             self.TRabi, error = self.TRabi_sigma_err, base_unit = self.time_unit
         )
-        OmegaRabi_2pi_unitful = UnitfulNumber(
+        OmegaRabi_2pi_unitful = ScientificNumber(
             self.OmegaRabi / (2 * np.pi),
             error = self.RabiFrequency_sigma_err / (2 * np.pi),
             base_unit = 'Hz'
@@ -108,7 +108,7 @@ class PopulationDecay(TimeSweep):
     def plot_result(self, fit_n_pts: int = 1000) -> plt.Figure:
         fig = super().plot_result(fit_n_pts = fit_n_pts)
         # add title showing the fit result
-        T1_unitful = UnitfulNumber(
+        T1_unitful = ScientificNumber(
             self.T1, error = self.T1_sigma_err, base_unit = self.time_unit
         )
         plt.title(f"$T_1$ = {T1_unitful}")
@@ -194,18 +194,18 @@ class Ramsey(TimeSweep):
         fig = super().plot_result()
 
         if not self.fit_gaussian:
-            T2Ramsey_unitful = UnitfulNumber(
+            T2Ramsey_unitful = ScientificNumber(
                 self.T2Ramsey, error = self.T2Ramsey_sigma_err,
                 base_unit = self.time_unit
             )
             T2_string = r"$T_2^*$ = " + f"{T2Ramsey_unitful}"
         else:
-            Texp_unitful = UnitfulNumber(
+            Texp_unitful = ScientificNumber(
                 self.Texp, self.Texp_sigma_err, base_unit = self.time_unit
             )
             Texp_string = r"$T_\mathrm{exp}$ = " + f"{Texp_unitful}"
 
-            Tgauss_unitful = UnitfulNumber(
+            Tgauss_unitful = ScientificNumber(
                 self.Tgauss, error = self.Tgauss_sigma_err,
                 base_unit = self.time_unit
             )
@@ -213,7 +213,7 @@ class Ramsey(TimeSweep):
             
             T2_string = ', '.join([Texp_string, Tgauss_string])
 
-        delta_freq_unitful = UnitfulNumber(
+        delta_freq_unitful = ScientificNumber(
             self.delta_freq, error = self.Tgauss_sigma_err, base_unit = 'Hz'
         )
         delta_freq_string = r"$\Delta f$ = " + f"{delta_freq_unitful}"
@@ -290,16 +290,16 @@ class HahnEcho(TimeSweep):
         fig = super().plot_result(fit_n_pts = fit_n_pts)
 
         if not self.fit_gaussian:
-            T2Echo_unitful = UnitfulNumber(
+            T2Echo_unitful = ScientificNumber(
                 self.T2Echo, error = self.T2Echo_sigma_err, base_unit = self.time_unit
             )
             T2_string = r"$T_{2E}$ = " + f"{T2Echo_unitful}"
         else:
-            Texp_unitful = UnitfulNumber(
+            Texp_unitful = ScientificNumber(
                 self.Texp, error = self.Texp_sigma_err, base_unit = self.time_unit
             )
             Texp_string = r"$T_\mathrm{exp}$ = " + f"{Texp_unitful}"
-            Tgauss_unitful = UnitfulNumber(
+            Tgauss_unitful = ScientificNumber(
                 self.Tgauss, error = self.Tgauss_sigma_err, base_unit = self.time_unit
             )
             Tgauss_string = r"$T_\mathrm{gauss}$ = " + f"{Tgauss_unitful}"
@@ -354,7 +354,7 @@ class PowerRabi(AmpSweep):
     def plot_result(self, fit_n_pts: int = 1000) -> plt.Figure:
         fig = super().plot_result(fit_n_pts = fit_n_pts)
 
-        amp_pi_unitful = UnitfulNumber(
+        amp_pi_unitful = ScientificNumber(
             self.amp_pi, error = self.amp_pi_sigma_err, base_unit = self.amp_unit
         )
         plt.title(r"$a_{\pi} = " + f"{amp_pi_unitful}")

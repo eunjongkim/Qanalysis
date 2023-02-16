@@ -2,7 +2,7 @@ from scipy.optimize import curve_fit, least_squares
 from sklearn.metrics import r2_score
 import matplotlib.pyplot as plt
 import numpy as np
-from Qanalysis.helper_functions import *
+from Qanalysis.api.helper_tools import *
 
 
 def lorentzian_fit_func(

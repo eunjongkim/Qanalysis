@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from Qanalysis.api.analysis import DataAnalysis
-from Qanalysis.api.helper_tools import UnitfulNumber
+from Qanalysis.api.helper_tools import ScientificNumber
 from sklearn.metrics import r2_score
 from scipy.optimize import curve_fit
 import numpy as np
@@ -84,14 +84,14 @@ class CurveFitAnalysis1D(CurveFitAnalysis):
     def _plot_base(self, fit_n_pts: int = 1000) -> plt.Figure:
         fig = plt.figure()
 
-        x_unitful = UnitfulNumber(
+        x_unitful = ScientificNumber(
             np.max(np.abs(self._x['value'])),
             base_unit = self._x['unit']
         )
         x_scaler = x_unitful.scaler
         x_scaled_unit = x_unitful.unit
 
-        y_unitful = UnitfulNumber(
+        y_unitful = ScientificNumber(
             np.max(np.abs(self._y['value'])),
             base_unit = self._y['unit']
         )
@@ -150,3 +150,35 @@ class CurveFitAnalysis1D(CurveFitAnalysis):
             raise ValueError("The data must be analyzed before plotting")
 
         return self._plot_base(fit_n_pts = fit_n_pts)
+
+
+class CurveFitAnalysis2D(CurveFitAnalysis):
+    """
+    Base class to implement curve fitting analysis for 2D data
+    """
+    def __init__(
+        self, x: np.ndarray, y: np.ndarray, z: np.ndarray,
+        x_name: str = None, y_name: str = None, z_name: str = None,
+        x_unit: str = None, y_unit: str = None, z_unit: str = None,
+    ) -> None:
+        # initialize parameters
+        self._x = {'value': x, 'name': x_name, 'unit': x_unit}
+        self._y = {'value': y, 'name': y_name, 'unit': y_unit}
+        self._z = {'value': z, 'name': z_name, 'unit': z_unit}
+
+        if x_name is None:
+            self._x['name'] = 'x'
+        if y_name is None:
+            self._y['name'] = 'y'
+        if z_name is None:
+            self._z['name'] = 'z'
+
+        self.n_pts = len(y)
+        self.is_analyzed = False
+
+        # initialize attributes to be overwritten
+        self.p0 = None
+        self.popt = None
+        self.pcov = None
+        self.lb = None
+        self.ub = None
