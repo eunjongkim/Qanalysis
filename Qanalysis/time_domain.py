@@ -961,15 +961,11 @@ class PulseTrain(TimeDomain):
         self.popt = None
         self.pcov = None
 
-    def fit_func(self, repetition, eps0, N1, *args):
+    def fit_func(self, repetition, eps0, N1, A, B):
         """
         Fitting Function for Pulse Train experiment.
         """
-        
         N = len(repetition) // self.n_correction
-        
-        A = args[:self.n_correction]
-        B = args[self.n_correction:]
 
         decay = [np.exp(-repetition[(i * N):((i + 1) * N)] / N1)
                  for i in range(self.n_correction)]
@@ -977,7 +973,7 @@ class PulseTrain(TimeDomain):
                               (1 + self.correction[i]) *
                               (2 * repetition[(i * N):((i + 1) * N)] + 0.5))
                        for i in range(self.n_correction)]
-        return np.hstack([A[i] * decay[i] * oscillation[i] + B[i]
+        return np.hstack([A * decay[i] * oscillation[i] + B
                           for i in range(self.n_correction)])
 
     def _guess_init_params(self):
@@ -995,8 +991,7 @@ class PulseTrain(TimeDomain):
         
         zero_idx = np.argmin(np.var(self.signal, axis=-1))
         
-        self.p0 = [-self.correction[zero_idx],
-                   N1, *([A0] * self.n_correction), *([B0] * self.n_correction)]
+        self.p0 = [-self.correction[zero_idx], N1, A0, B0]
 
     def analyze(self, p0=None, plot=True, **kwargs):
         """
